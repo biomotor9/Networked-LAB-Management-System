@@ -1,0 +1,41 @@
+{
+  "name": "atlas-eln",
+  "version": "0.1.0",
+  "description": "Atlas ELN 本地实验计划与实验记录管理工具",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "npm run test:unit && npm run build",
+    "test:unit": "tsx --test tests/content.test.ts tests/domain-logic.test.ts tests/persistence.test.ts tests/password.test.ts tests/server-snapshot.test.ts",
+    "lint": "eslint . --ignore-pattern .next --ignore-pattern dist --ignore-pattern .vinext --ignore-pattern .wrangler",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "admin:bootstrap": "tsx scripts/bootstrap-admin.ts"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.11.2",
+    "drizzle-orm": "0.45.2",
+    "next": "^16.3.0",
+    "postgres": "^3.4.7",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "drizzle-kit": "0.31.10",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "tailwindcss": "4.2.1",
+    "tsx": "^4.20.6",
+    "typescript": "5.9.3"
+  },
+  "type": "module"
+}
