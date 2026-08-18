@@ -3,14 +3,18 @@ import { NextResponse } from "next/server";
 import { db } from "../../../../../db";
 import { documents, plans } from "../../../../../db/schema";
 import { validateDocumentContent } from "../../../../features/workspace/content";
+import { recordAudit } from "../../../../lib/auth/audit";
 import { requireUser } from "../../../../lib/auth/session";
-import { getOrCreateTeamProject } from "../../../../lib/workspace/project-access";
+import { projectAccessResponse } from "../../../../lib/projects/access";
+import { requireWorkspaceProject } from "../../../../lib/workspace/project-access";
 
 type Context = { params: Promise<{ planId: string }> };
 
-export async function GET(_request: Request, context: Context) {
+export async function GET(request: Request, context: Context) {
   const actor = await requireUser();
-  const project = await getOrCreateTeamProject(actor);
+  let project;
+  try { project = (await requireWorkspaceProject(actor, request, "view")).project; }
+  catch (error) { return projectAccessResponse(error) ?? NextResponse.json({ error: "请选择项目。" }, { status: 400 }); }
   const { planId } = await context.params;
   const key = `${project.id}:${planId}`;
   const [plan] = await db.select({ key: plans.key }).from(plans).where(eq(plans.key, key)).limit(1);
@@ -26,7 +30,10 @@ export async function GET(_request: Request, context: Context) {
 
 export async function PUT(request: Request, context: Context) {
   const actor = await requireUser();
-  const project = await getOrCreateTeamProject(actor);
+  let access;
+  try { access = await requireWorkspaceProject(actor, request, "edit-content"); }
+  catch (error) { return projectAccessResponse(error) ?? NextResponse.json({ error: "请选择项目。" }, { status: 400 }); }
+  const project = access.project;
   const { planId } = await context.params;
   const key = `${project.id}:${planId}`;
   const payload = await request.json() as { version?: unknown; content?: unknown };
@@ -54,5 +61,6 @@ export async function PUT(request: Request, context: Context) {
       document: current ? { planId, content: current.content, version: current.version, updatedAt: current.updatedAt.toISOString() } : null,
     }, { status: 409 });
   }
+  await recordAudit({ action: "document.updated", targetType: "plan", targetId: planId, projectId: project.id, actorUserId: actor.id, teamId: actor.teamId, metadata: { emergencyReason: access.emergencyReason } });
   return NextResponse.json({ document: { planId, content: saved.content, version: saved.version, updatedAt: saved.updatedAt.toISOString() } });
 }

@@ -1,4 +1,5 @@
-import { boolean, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { boolean, check, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
@@ -32,11 +33,37 @@ export const projects = pgTable("projects", {
   id: text("id").primaryKey(),
   teamId: text("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
+  normalizedName: text("normalized_name").notNull(),
+  description: text("description").notNull().default(""),
+  status: text("status", { enum: ["筹备中", "进行中", "暂停", "已完成"] }).notNull().default("筹备中"),
+  startDate: text("start_date"),
+  endDate: text("end_date"),
+  tags: jsonb("tags").$type<string[]>().notNull().default([]),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  archivedBy: text("archived_by").references(() => users.id, { onDelete: "set null" }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  completedBy: text("completed_by").references(() => users.id, { onDelete: "set null" }),
   version: integer("version").notNull().default(1),
   createdBy: text("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [uniqueIndex("projects_team_unique").on(table.teamId)]);
+}, (table) => [
+  uniqueIndex("projects_team_name_unique").on(table.teamId, table.normalizedName),
+  index("projects_team_archived_idx").on(table.teamId, table.archivedAt),
+]);
+
+export const projectMembers = pgTable("project_members", {
+  projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: text("role", { enum: ["lead", "member", "viewer"] }).notNull(),
+  addedBy: text("added_by").references(() => users.id, { onDelete: "set null" }),
+  joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.projectId, table.userId] }),
+  uniqueIndex("project_members_single_lead_unique").on(table.projectId).where(sql`${table.role} = 'lead'`),
+  index("project_members_user_idx").on(table.userId),
+]);
 
 export const plans = pgTable("plans", {
   key: text("key").primaryKey(),
@@ -55,6 +82,7 @@ export const plans = pgTable("plans", {
   graphX: doublePrecision("graph_x"),
   graphY: doublePrecision("graph_y"),
   version: integer("version").notNull().default(1),
+  createdBy: text("created_by").notNull().references(() => users.id, { onDelete: "restrict" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -116,8 +144,8 @@ export const attachments = pgTable("attachments", {
   key: text("key").primaryKey(),
   id: text("id").notNull(),
   projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  planKey: text("plan_key").notNull().references(() => plans.key, { onDelete: "cascade" }),
-  planId: text("plan_id").notNull(),
+  planKey: text("plan_key").references(() => plans.key, { onDelete: "cascade" }),
+  planId: text("plan_id"),
   originalName: text("original_name").notNull(),
   storageKey: text("storage_key").notNull(),
   mimeType: text("mime_type").notNull().default("application/octet-stream"),
@@ -129,6 +157,19 @@ export const attachments = pgTable("attachments", {
   uniqueIndex("attachments_project_id_unique").on(table.projectId, table.id),
   uniqueIndex("attachments_storage_key_unique").on(table.storageKey),
   index("attachments_project_plan_idx").on(table.projectId, table.planId),
+  check("attachments_scope_check", sql`(${table.planKey} is null and ${table.planId} is null) or (${table.planKey} is not null and ${table.planId} is not null)`),
+]);
+
+export const emergencyEditSessions = pgTable("emergency_edit_sessions", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  reason: text("reason").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("emergency_edit_project_user_idx").on(table.projectId, table.userId, table.expiresAt),
 ]);
 
 export const sessions = pgTable("sessions", {
@@ -147,6 +188,7 @@ export const sessions = pgTable("sessions", {
 export const auditEvents = pgTable("audit_events", {
   id: text("id").primaryKey(),
   teamId: text("team_id").references(() => teams.id, { onDelete: "set null" }),
+  projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
   actorUserId: text("actor_user_id").references(() => users.id, { onDelete: "set null" }),
   action: text("action").notNull(),
   targetType: text("target_type").notNull(),
@@ -155,4 +197,5 @@ export const auditEvents = pgTable("audit_events", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("audit_events_team_created_idx").on(table.teamId, table.createdAt),
+  index("audit_events_project_created_idx").on(table.projectId, table.createdAt),
 ]);

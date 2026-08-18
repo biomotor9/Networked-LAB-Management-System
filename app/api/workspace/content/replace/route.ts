@@ -6,11 +6,15 @@ import { validateWorkspaceContent } from "../../../../features/workspace/content
 import { recordAudit } from "../../../../lib/auth/audit";
 import { requireUser } from "../../../../lib/auth/session";
 import { readProjectContent } from "../../../../lib/workspace/content";
-import { getOrCreateTeamProject } from "../../../../lib/workspace/project-access";
+import { projectAccessResponse } from "../../../../lib/projects/access";
+import { requireWorkspaceProject } from "../../../../lib/workspace/project-access";
 
 export async function PUT(request: Request) {
   const actor = await requireUser();
-  const project = await getOrCreateTeamProject(actor);
+  let access;
+  try { access = await requireWorkspaceProject(actor, request, "edit-content"); }
+  catch (error) { return projectAccessResponse(error) ?? NextResponse.json({ error: "请选择项目。" }, { status: 400 }); }
+  const project = access.project;
   const payload = await request.json() as { mode?: unknown; documents?: unknown; entries?: unknown };
   if (payload.mode !== "replace" && payload.mode !== "if-empty") return NextResponse.json({ error: "内容迁移模式无效。" }, { status: 400 });
   const storedPlans = await db.select({ id: plans.id }).from(plans).where(eq(plans.projectId, project.id));
@@ -41,6 +45,6 @@ export async function PUT(request: Request) {
     if (error instanceof Error && error.message === "CONTENT_NOT_EMPTY") return NextResponse.json({ error: "团队服务器已有文档或事件，未覆盖现有内容。", code: "CONTENT_NOT_EMPTY" }, { status: 409 });
     throw error;
   }
-  await recordAudit({ action: "workspace.content_replaced", targetType: "project", targetId: project.id, actorUserId: actor.id, teamId: actor.teamId, metadata: { documents: Object.keys(content.documents).length, entries: content.entries.length } });
+  await recordAudit({ action: "workspace.content_replaced", targetType: "project", targetId: project.id, projectId: project.id, actorUserId: actor.id, teamId: actor.teamId, metadata: { documents: Object.keys(content.documents).length, entries: content.entries.length, emergencyReason: access.emergencyReason } });
   return NextResponse.json(await readProjectContent(project.id));
 }

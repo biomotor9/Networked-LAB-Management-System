@@ -38,7 +38,7 @@ export type ServerDocument = {
 
 export type Attachment = {
   id: string;
-  planId: string;
+  planId: string | null;
   originalName: string;
   mimeType: string;
   sizeBytes: number;

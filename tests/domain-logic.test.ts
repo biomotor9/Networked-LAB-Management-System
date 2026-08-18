@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { hasDependencyPath, wouldCreateDependencyCycle } from "../app/features/dependencies/dependency-graph";
 import { parseMarkdownBlocks, serializeMarkdownBlocks } from "../app/features/notebook/markdown-codec";
-import { canReparentPlan, collectDescendantIds } from "../app/features/plans/plan-tree";
+import { buildVisiblePlanTree, canReparentPlan, collectDescendantIds } from "../app/features/plans/plan-tree";
 import type { Dependency, Plan } from "../app/features/workspace/model";
 
 function plan(id: string, parentId: string | null): Plan {
@@ -26,6 +26,18 @@ test("collects a complete plan subtree and rejects hierarchy cycles", () => {
   assert.equal(canReparentPlan(plans, "root", "leaf"), false);
   assert.equal(canReparentPlan(plans, "leaf", "other"), true);
   assert.equal(canReparentPlan(plans, "leaf", "child"), false);
+});
+
+test("builds an expandable plan tree and reveals matching descendants with their ancestors", () => {
+  const root = plan("root", null);
+  const child = { ...plan("child", "root"), title: "蛋白筛选" };
+  const leaf = { ...plan("leaf", "child"), title: "复测验证" };
+  const other = plan("other", null);
+  const plans = [root, child, leaf, other];
+
+  assert.deepEqual(buildVisiblePlanTree(plans, new Set()).map(({ plan: item, depth }) => [item.id, depth]), [["root", 0], ["other", 0]]);
+  assert.deepEqual(buildVisiblePlanTree(plans, new Set(["root", "child"])).map(({ plan: item, depth }) => [item.id, depth]), [["root", 0], ["child", 1], ["leaf", 2], ["other", 0]]);
+  assert.deepEqual(buildVisiblePlanTree(plans, new Set(), "复测").map(({ plan: item, depth }) => [item.id, depth]), [["root", 0], ["child", 1], ["leaf", 2]]);
 });
 
 test("detects dependency paths and prevents a new directed cycle", () => {
@@ -57,3 +69,8 @@ test("round-trips supported Markdown block types", () => {
   assert.equal(serializeMarkdownBlocks(blocks), markdown);
 });
 
+test("keeps a new Markdown document blank", () => {
+  const blocks = parseMarkdownBlocks("");
+  assert.deepEqual(blocks.map(({ type, text }) => ({ type, text })), [{ type: "paragraph", text: "" }]);
+  assert.equal(serializeMarkdownBlocks(blocks), "");
+});

@@ -16,6 +16,22 @@ npm run dev
 
 本地访问 `http://localhost:3000`。初始化管理员所需的 `BOOTSTRAP_ADMIN_*` 环境变量见 `.env.example`；管理员首次登录必须修改密码。
 
+### Windows 本地测试环境
+
+仓库根目录准备好被 Git 忽略的 `.env` 后，可以使用以下命令管理完整的 Docker 测试环境：
+
+```bash
+npm run local:up       # 快速启动已有环境和数据
+npm run local:rebuild  # 代码或依赖变化后重新构建并启动
+npm run local:status   # 查看 PostgreSQL、Web 和代理健康状态
+npm run local:logs     # 查看最近日志
+npm run local:stop     # 停止服务但保留数据库和附件
+```
+
+本地入口为 `http://127.0.0.1:3000`。首次创建的数据保存在独立 Docker 命名卷中，执行停止或再次启动不会清除数据；不要使用 `docker compose down -v`。
+
+日常重新启动使用 `npm run local:up`，它会复用现有镜像，不执行依赖安装。只有代码或依赖变化需要进入容器时才使用 `npm run local:rebuild`。Docker 构建会持久复用 npm 下载缓存；网络访问官方 npm 源较慢时，可仅在本机 `.env` 中设置 `NPM_REGISTRY=https://registry.npmmirror.com`，无需修改或提交项目配置。
+
 ## Docker 测试部署
 
 ```bash

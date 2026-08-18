@@ -23,7 +23,10 @@ services:
     networks: [backend]
 
   web:
-    build: .
+    build:
+      context: .
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://atlas:${POSTGRES_PASSWORD}@postgres:5432/atlas

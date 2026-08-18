@@ -37,7 +37,7 @@ export async function readProjectContent(projectId: string): Promise<{
       sizeBytes: attachment.sizeBytes,
       sha256: attachment.sha256,
       createdAt: attachment.createdAt.toISOString(),
-      contentUrl: `/api/workspace/attachments/${encodeURIComponent(attachment.id)}/content`,
+      contentUrl: `/api/workspace/attachments/${encodeURIComponent(attachment.id)}/content?projectId=${encodeURIComponent(projectId)}`,
     })),
   };
 }

@@ -1,6 +1,6 @@
 # Atlas ELN 服务器部署与内测手册
 
-> 适用版本：2026-08-14 当前仓库
+> 适用版本：2026-08-19 当前仓库
 > 目标环境：Linux、2 核 CPU、2 GB 内存、40 GB 磁盘、Docker、华为云公网 IP  
 > 内测访问方式：临时公网 IP HTTP；保留 SSH 隧道诊断入口
 
@@ -126,7 +126,7 @@ cd /opt/atlas-eln
 ls -la
 test -f compose.yaml && echo "compose.yaml OK"
 test -f Dockerfile && echo "Dockerfile OK"
-test -f drizzle/0003_smart_human_robot.sql && echo "database migrations OK"
+test -f drizzle/0004_ordinary_maestro.sql && echo "database migrations OK"
 ```
 
 ## 5. 创建环境配置
@@ -197,7 +197,7 @@ docker compose logs --tail=150 web
 - `postgres` 显示 `healthy`；
 - `web` 最终显示 `healthy`；
 - Web 日志没有迁移失败、密码配置错误或数据库连接错误；
-- 首次启动自动应用 `drizzle/` 中尚未执行的迁移；当前基线包含 `0000` 至 `0003` 共四组迁移；
+- 首次启动自动应用 `drizzle/` 中尚未执行的迁移；当前基线包含 `0000` 至 `0004` 共五组迁移；
 - 首次启动幂等创建管理员、团队和默认实验项目。
 
 启动可能需要 30–90 秒。可以等待后再次执行：

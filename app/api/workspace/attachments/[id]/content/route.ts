@@ -3,14 +3,17 @@ import { db } from "../../../../../../db";
 import { attachments } from "../../../../../../db/schema";
 import { requireUser } from "../../../../../lib/auth/session";
 import { attachmentStorage } from "../../../../../lib/attachments/storage";
-import { getOrCreateTeamProject } from "../../../../../lib/workspace/project-access";
+import { projectAccessResponse } from "../../../../../lib/projects/access";
+import { requireWorkspaceProject } from "../../../../../lib/workspace/project-access";
 
 export const runtime = "nodejs";
 type Context = { params: Promise<{ id: string }> };
 
 export async function GET(request: Request, context: Context) {
   const actor = await requireUser();
-  const project = await getOrCreateTeamProject(actor);
+  let project;
+  try { project = (await requireWorkspaceProject(actor, request, "view")).project; }
+  catch (error) { return projectAccessResponse(error) ?? new Response("请选择项目。", { status: 400 }); }
   const { id } = await context.params;
   const [attachment] = await db.select().from(attachments)
     .where(and(eq(attachments.projectId, project.id), eq(attachments.id, id))).limit(1);

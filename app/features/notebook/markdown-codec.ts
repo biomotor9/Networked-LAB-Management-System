@@ -1,14 +1,7 @@
-import { makeId, type Entry, type Plan } from "../workspace/model";
+import { makeId } from "../workspace/model";
 
 export type MarkdownBlockType = "paragraph" | "h1" | "h2" | "h3" | "bullet" | "ordered" | "task" | "quote" | "code" | "divider" | "image";
 export type MarkdownBlock = { id: string; type: MarkdownBlockType; text: string; checked?: boolean; src?: string };
-
-export function defaultNotebook(plan: Plan, planEntries: Entry[]): string {
-  const history = planEntries.length
-    ? planEntries.map((entry) => `## ${entry.title}\n\n**${entry.type} · ${entry.date}**\n\n${entry.content}`).join("\n\n---\n\n")
-    : "## 实验记录\n\n从这里记录实验设计、过程、结果与分析。";
-  return `# ${plan.title}\n\n> ${plan.summary || "填写本计划的背景与范围。"}\n\n## 探索目标\n\n${plan.objective || "- [ ] 填写本次实验需要验证的问题"}\n\n## 成功标准\n\n${plan.success || "- [ ] 填写可判断实验是否成功的标准"}\n\n---\n\n${history}`;
-}
 
 export function parseMarkdownBlocks(source: string): MarkdownBlock[] {
   const lines = source.replace(/\r/g, "").split("\n");
@@ -55,4 +48,3 @@ export function serializeMarkdownBlocks(blocks: readonly MarkdownBlock[]): strin
     return block.text;
   }).join("\n");
 }
-

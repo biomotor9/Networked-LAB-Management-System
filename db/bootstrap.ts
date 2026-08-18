@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { hashPassword, validatePassword } from "../app/lib/auth/password";
 import { db } from ".";
-import { projects, teamMembers, teams, users } from "./schema";
+import { teamMembers, teams, users } from "./schema";
 
 export async function bootstrapInitialAdmin(): Promise<"created" | "exists" | "skipped"> {
   const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
@@ -24,7 +24,6 @@ export async function bootstrapInitialAdmin(): Promise<"created" | "exists" | "s
     await tx.insert(users).values({ id: userId, email, displayName, passwordHash, mustChangePassword: true });
     await tx.insert(teams).values({ id: teamId, name: teamName, createdBy: userId });
     await tx.insert(teamMembers).values({ teamId, userId, role: "owner" });
-    await tx.insert(projects).values({ id: randomUUID(), teamId, name: "默认实验项目", createdBy: userId });
   });
   return "created";
 }
