@@ -1,7 +1,7 @@
 import { and, eq, notInArray, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "../../../../db";
-import { dependencies, plans, projects } from "../../../../db/schema";
+import { dependencies, plans, projects, questionExperimentLinks, questions } from "../../../../db/schema";
 import { validatePlanDependencySnapshot } from "../../../features/workspace/server-snapshot";
 import { validatePlanRemoval } from "../../../features/projects/operations";
 import { recordAudit } from "../../../lib/auth/audit";
@@ -25,12 +25,15 @@ export async function PUT(request: Request) {
   try { snapshot = validatePlanDependencySnapshot(payload); }
   catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "工作区数据无效。" }, { status: 400 }); }
 
-  const [storedPlans, storedDependencies] = await Promise.all([
+  const [storedPlans, storedDependencies, storedQuestions, storedQuestionLinks] = await Promise.all([
     db.select({ id: plans.id, parentId: plans.parentId, createdBy: plans.createdBy }).from(plans).where(eq(plans.projectId, project.id)),
     db.select({ sourceId: dependencies.sourcePlanId, targetId: dependencies.targetPlanId }).from(dependencies).where(eq(dependencies.projectId, project.id)),
+    db.select({ planId: questions.sourcePlanId }).from(questions).where(eq(questions.projectId, project.id)),
+    db.select({ planId: questionExperimentLinks.planId }).from(questionExperimentLinks).where(eq(questionExperimentLinks.projectId, project.id)),
   ]);
   const removalError = validatePlanRemoval({
     storedPlans, storedDependencies, incomingPlanIds: new Set(snapshot.plans.map((plan) => plan.id)), actorId: actor.id, projectRole: access.projectRole,
+    referencedQuestionPlanIds: new Set([...storedQuestions, ...storedQuestionLinks].map((item) => item.planId)),
   });
   if (removalError) return NextResponse.json({ error: removalError }, { status: removalError.includes("只能删除自己") ? 403 : 409 });
 

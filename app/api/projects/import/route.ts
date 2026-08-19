@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "../../../../db";
-import { dependencies, documents, entries, plans, projectMembers, projects, teamMembers, users } from "../../../../db/schema";
+import { dependencies, documents, entries, plans, projectMembers, projects, questionComments, questionExperimentLinks, questions, teamMembers, users } from "../../../../db/schema";
 import { validateProjectDate, validateProjectDescription, validateProjectName, validateProjectStatus, validateProjectTags } from "../../../features/projects/model";
+import { validateQuestionBackup } from "../../../features/questions/model";
 import { validateWorkspaceContent } from "../../../features/workspace/content";
 import { validatePlanDependencySnapshot } from "../../../features/workspace/server-snapshot";
 import { recordAudit } from "../../../lib/auth/audit";
@@ -19,6 +20,9 @@ type BackupProject = {
   dependencies?: unknown;
   documents?: unknown;
   entries?: unknown;
+  questions?: unknown;
+  questionComments?: unknown;
+  questionExperimentLinks?: unknown;
 };
 
 export async function POST(request: Request) {
@@ -26,10 +30,15 @@ export async function POST(request: Request) {
   const payload = await request.json() as { mode?: unknown; targetProjectId?: unknown; version?: unknown; name?: unknown; data?: BackupProject };
   if (payload.mode !== "new" && payload.mode !== "merge") return NextResponse.json({ error: "导入模式无效。" }, { status: 400 });
   if (!payload.data?.project) return NextResponse.json({ error: "项目备份格式无效。" }, { status: 400 });
-  let snapshot; let content;
+  let snapshot; let content; let questionData;
   try {
     snapshot = validatePlanDependencySnapshot({ plans: payload.data.plans, dependencies: payload.data.dependencies });
     content = validateWorkspaceContent({ documents: payload.data.documents, entries: payload.data.entries }, new Set(snapshot.plans.map((plan) => plan.id)));
+    questionData = validateQuestionBackup({
+      questions: payload.data.questions ?? [],
+      questionComments: payload.data.questionComments ?? [],
+      questionExperimentLinks: payload.data.questionExperimentLinks ?? [],
+    }, new Set(snapshot.plans.map((plan) => plan.id)));
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "项目备份内容无效。" }, { status: 400 }); }
 
   if (payload.mode === "new") {
@@ -68,6 +77,23 @@ export async function POST(request: Request) {
         const documentValues = Object.entries(content.documents).map(([planId, markdown]) => ({ key: `${projectValues.id}:${planId}`, projectId: projectValues.id, planId, content: markdown, version: 1, updatedBy: actor.id }));
         if (documentValues.length) await tx.insert(documents).values(documentValues);
         if (content.entries.length) await tx.insert(entries).values(content.entries.map((entry) => ({ key: `${projectValues.id}:${entry.id}`, id: entry.id, projectId: projectValues.id, planKey: `${projectValues.id}:${entry.planId}`, planId: entry.planId, date: entry.date, type: entry.type, title: entry.title, content: entry.content, version: 1, createdBy: actor.id, updatedBy: actor.id })));
+        if (questionData.questions.length) await tx.insert(questions).values(questionData.questions.map((question) => ({
+          key: `${projectValues.id}:${question.id}`, id: question.id, projectId: projectValues.id,
+          sourcePlanKey: `${projectValues.id}:${question.sourcePlanId}`, sourcePlanId: question.sourcePlanId, number: question.number,
+          title: question.title, context: question.context, sourceExcerpt: question.sourceExcerpt, status: question.status, resolution: question.resolution,
+          createdBy: actor.id, resolvedBy: question.status === "已解决" || question.status === "已搁置" ? actor.id : null,
+          resolvedAt: question.status === "已解决" || question.status === "已搁置" ? new Date() : null,
+        })));
+        if (questionData.questionComments.length) await tx.insert(questionComments).values(questionData.questionComments.map((comment) => ({
+          key: `${projectValues.id}:${comment.id}`, id: comment.id, projectId: projectValues.id,
+          questionKey: `${projectValues.id}:${comment.questionId}`, questionId: comment.questionId, content: comment.content,
+          createdBy: actor.id, updatedBy: actor.id, deletedAt: comment.deletedAt ? new Date(comment.deletedAt) : null,
+        })));
+        if (questionData.questionExperimentLinks.length) await tx.insert(questionExperimentLinks).values(questionData.questionExperimentLinks.map((link) => ({
+          key: `${projectValues.id}:${link.questionId}:${link.planId}`, projectId: projectValues.id,
+          questionKey: `${projectValues.id}:${link.questionId}`, questionId: link.questionId,
+          planKey: `${projectValues.id}:${link.planId}`, planId: link.planId, outcome: link.outcome, note: link.note, createdBy: actor.id,
+        })));
       });
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "23505") return NextResponse.json({ error: "团队内已存在同名项目或备份包含冲突 ID。" }, { status: 409 });
@@ -91,6 +117,12 @@ export async function POST(request: Request) {
     const duplicates = await db.select({ id: entries.id }).from(entries).where(and(eq(entries.projectId, payload.targetProjectId), inArray(entries.id, entryIds)));
     if (duplicates.length) return NextResponse.json({ error: "备份与当前项目存在事件 ID 冲突，不能自动合并。" }, { status: 409 });
   }
+  if (questionData.questions.length) {
+    const incomingQuestionIds = questionData.questions.map((question) => question.id);
+    const incomingNumbers = questionData.questions.map((question) => question.number);
+    const duplicates = await db.select({ id: questions.id }).from(questions).where(and(eq(questions.projectId, payload.targetProjectId), or(inArray(questions.id, incomingQuestionIds), inArray(questions.number, incomingNumbers))));
+    if (duplicates.length) return NextResponse.json({ error: "备份与当前项目存在问题 ID 或编号冲突，不能自动合并。" }, { status: 409 });
+  }
   try {
     await db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${payload.targetProjectId as string}))`);
@@ -101,6 +133,23 @@ export async function POST(request: Request) {
       const documentValues = Object.entries(content.documents).map(([planId, markdown]) => ({ key: `${payload.targetProjectId}:${planId}`, projectId: payload.targetProjectId as string, planId, content: markdown, version: 1, updatedBy: actor.id }));
       if (documentValues.length) await tx.insert(documents).values(documentValues);
       if (content.entries.length) await tx.insert(entries).values(content.entries.map((entry) => ({ key: `${payload.targetProjectId}:${entry.id}`, id: entry.id, projectId: payload.targetProjectId as string, planKey: `${payload.targetProjectId}:${entry.planId}`, planId: entry.planId, date: entry.date, type: entry.type, title: entry.title, content: entry.content, version: 1, createdBy: actor.id, updatedBy: actor.id })));
+      if (questionData.questions.length) await tx.insert(questions).values(questionData.questions.map((question) => ({
+        key: `${payload.targetProjectId}:${question.id}`, id: question.id, projectId: payload.targetProjectId as string,
+        sourcePlanKey: `${payload.targetProjectId}:${question.sourcePlanId}`, sourcePlanId: question.sourcePlanId, number: question.number,
+        title: question.title, context: question.context, sourceExcerpt: question.sourceExcerpt, status: question.status, resolution: question.resolution,
+        createdBy: actor.id, resolvedBy: question.status === "已解决" || question.status === "已搁置" ? actor.id : null,
+        resolvedAt: question.status === "已解决" || question.status === "已搁置" ? new Date() : null,
+      })));
+      if (questionData.questionComments.length) await tx.insert(questionComments).values(questionData.questionComments.map((comment) => ({
+        key: `${payload.targetProjectId}:${comment.id}`, id: comment.id, projectId: payload.targetProjectId as string,
+        questionKey: `${payload.targetProjectId}:${comment.questionId}`, questionId: comment.questionId, content: comment.content,
+        createdBy: actor.id, updatedBy: actor.id, deletedAt: comment.deletedAt ? new Date(comment.deletedAt) : null,
+      })));
+      if (questionData.questionExperimentLinks.length) await tx.insert(questionExperimentLinks).values(questionData.questionExperimentLinks.map((link) => ({
+        key: `${payload.targetProjectId}:${link.questionId}:${link.planId}`, projectId: payload.targetProjectId as string,
+        questionKey: `${payload.targetProjectId}:${link.questionId}`, questionId: link.questionId,
+        planKey: `${payload.targetProjectId}:${link.planId}`, planId: link.planId, outcome: link.outcome, note: link.note, createdBy: actor.id,
+      })));
     });
   } catch (error) {
     if (error instanceof Error && error.message === "VERSION_CONFLICT") return NextResponse.json({ error: "项目已被其他成员更新，请重新加载。", code: "VERSION_CONFLICT" }, { status: 409 });

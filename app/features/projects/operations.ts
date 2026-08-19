@@ -7,11 +7,13 @@ export function validatePlanRemoval(input: {
   incomingPlanIds: Set<string>;
   actorId: string;
   projectRole: "lead" | "member" | "viewer" | null;
+  referencedQuestionPlanIds?: Set<string>;
 }): string | null {
   const removed = input.storedPlans.filter((plan) => !input.incomingPlanIds.has(plan.id));
   for (const plan of removed) {
     if (input.storedPlans.some((candidate) => candidate.parentId === plan.id)) return "请先移动或删除该计划的下级计划。";
     if (input.storedDependencies.some((dependency) => dependency.sourceId === plan.id || dependency.targetId === plan.id)) return "请先解除该计划的执行依赖。";
+    if (input.referencedQuestionPlanIds?.has(plan.id)) return "该计划仍被问题记录引用，请先处理相关问题或验证关系。";
     if (input.projectRole === "member" && plan.createdBy !== input.actorId) return "普通项目成员只能删除自己创建的计划。";
   }
   return null;

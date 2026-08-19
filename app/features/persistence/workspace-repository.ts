@@ -52,17 +52,19 @@ export function readWorkspaceData(value: unknown): WorkspaceData {
     graphExpanded: Array.isArray(root.graphExpanded) ? root.graphExpanded.filter((id): id is string => typeof id === "string") : [],
     viewStates: isObject(root.viewStates) ? root.viewStates as WorkspaceData["viewStates"] : {},
     notebookDocs: isObject(root.notebookDocs) ? root.notebookDocs as WorkspaceData["notebookDocs"] : {},
+    questions: Array.isArray(root.questions) ? root.questions as WorkspaceData["questions"] : [],
+    questionComments: Array.isArray(root.questionComments) ? root.questionComments as WorkspaceData["questionComments"] : [],
+    questionExperimentLinks: Array.isArray(root.questionExperimentLinks) ? root.questionExperimentLinks as WorkspaceData["questionExperimentLinks"] : [],
   };
 }
 
 export function createBackup(data: WorkspaceData, exportedAt = new Date().toISOString()): BackupFile {
-  return { format: "atlas-eln-backup", version: 1, exportedAt, data };
+  return { format: "atlas-eln-backup", version: 2, exportedAt, data };
 }
 
 export function readBackupFile(value: unknown): WorkspaceData {
-  if (isObject(value) && value.format === "atlas-eln-backup" && value.version !== 1) {
+  if (isObject(value) && value.format === "atlas-eln-backup" && value.version !== 1 && value.version !== 2) {
     throw new Error("该备份版本暂不受支持。");
   }
   return readWorkspaceData(value);
 }
-

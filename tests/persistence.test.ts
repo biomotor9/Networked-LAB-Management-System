@@ -26,17 +26,20 @@ const workspace: WorkspaceData = {
   graphExpanded: ["p1"],
   viewStates: { __root__: { x: 1, y: 2, zoom: 1 } },
   notebookDocs: { p1: "# 测试计划" },
+  questions: [],
+  questionComments: [],
+  questionExperimentLinks: [],
 };
 
 test("creates and reads a versioned backup", () => {
   const backup = createBackup(workspace, "2026-08-13T00:00:00.000Z");
   assert.equal(backup.format, "atlas-eln-backup");
-  assert.equal(backup.version, 1);
+  assert.equal(backup.version, 2);
   assert.deepEqual(readBackupFile(backup), workspace);
 });
 
 test("rejects unsupported or malformed backups", () => {
-  assert.throws(() => readBackupFile({ format: "atlas-eln-backup", version: 2, data: workspace }), /版本暂不受支持/);
+  assert.throws(() => readBackupFile({ format: "atlas-eln-backup", version: 3, data: workspace }), /版本暂不受支持/);
   assert.throws(() => readWorkspaceData({ plans: "invalid", entries: [] }), /不是有效/);
 });
 

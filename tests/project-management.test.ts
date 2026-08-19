@@ -30,6 +30,7 @@ test("enforces safe member plan deletion", () => {
   assert.match(validatePlanRemoval({ storedPlans: plans, storedDependencies: [], incomingPlanIds: new Set(["root", "child"]), actorId: "u1", projectRole: "member" })!, /自己创建/);
   assert.match(validatePlanRemoval({ storedPlans: [plans[2]], storedDependencies: [{ sourceId: "other", targetId: "x" }], incomingPlanIds: new Set(), actorId: "u2", projectRole: "member" })!, /依赖/);
   assert.equal(validatePlanRemoval({ storedPlans: [plans[2]], storedDependencies: [], incomingPlanIds: new Set(), actorId: "u2", projectRole: "member" }), null);
+  assert.match(validatePlanRemoval({ storedPlans: [plans[2]], storedDependencies: [], incomingPlanIds: new Set(), actorId: "u2", projectRole: "member", referencedQuestionPlanIds: new Set(["other"]) })!, /问题记录/);
 });
 
 test("finds dependencies crossing a moved plan subtree", () => {

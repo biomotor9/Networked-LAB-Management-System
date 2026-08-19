@@ -26,6 +26,11 @@ import {
   localDateString,
   makeId,
   statuses,
+  type Question,
+  type QuestionComment,
+  type QuestionExperimentLink,
+  type QuestionStatus,
+  type VerificationOutcome,
   type ArrowStyle,
   type Attachment,
   type Dependency,
@@ -55,6 +60,8 @@ import { formatAttachmentSize } from "./features/attachments/validation";
 import ProjectSidebar from "./features/projects/project-sidebar";
 import ProjectDrawer from "./features/projects/project-drawer";
 import type { ProjectDetail, ProjectSummary } from "./features/projects/model";
+import { questionCode } from "./features/questions/model";
+import { QuestionCreateDialog, QuestionDetailDrawer, QuestionList, QuestionSummaryList } from "./features/questions/question-ui";
 type PlanNodeData = {
   plan: Plan;
   plans: Plan[];
@@ -63,6 +70,9 @@ type PlanNodeData = {
   expandedIds: Set<string>;
   recordCount: number;
   childCount: number;
+  questions: Question[];
+  questionComments: QuestionComment[];
+  questionExperimentLinks: QuestionExperimentLink[];
   expanded: boolean;
   getViewport: (id: string) => ViewportState | undefined;
   selectedDependencyId: string | null;
@@ -80,8 +90,11 @@ type PlanNodeData = {
   onBeginHierarchyDrag: (id: string, event: React.PointerEvent<HTMLButtonElement>) => void;
   onMoveHierarchyDrag: (event: React.PointerEvent<HTMLButtonElement>) => void;
   onEndHierarchyDrag: (event: React.PointerEvent<HTMLButtonElement>) => void;
+  onSelectQuestion: (id: string) => void;
+  onCreateQuestion: (planId: string) => void;
 };
 type PlanFlowNode = Node<PlanNodeData, "plan">;
+type QuestionBundle = { questions: Question[]; questionComments: QuestionComment[]; questionExperimentLinks: QuestionExperimentLink[] };
 
 function Icon({ name }: { name: string }) {
   const icons: Record<string, string> = { search: "⌕", folder: "▤", chevron: "⌄", add: "+", book: "▱", back: "←", more: "•••", settings: "⚙", branch: "⌞", close: "×" };
@@ -116,6 +129,7 @@ type MarkdownEditorApi = {
   wrapSelection: (before: string, after: string, placeholder?: string) => void;
   insertDivider: () => void;
   insertImage: (src: string, alt?: string) => void;
+  getSelectedText: () => string;
 };
 
 const MarkdownBlockEditor = forwardRef<MarkdownEditorApi, { source: string; readOnly?: boolean; overview?: React.ReactNode; onChange: (value: string) => void; onImageFile: (file: File) => Promise<{ src: string; alt: string }> }>(({ source, readOnly = false, overview, onChange, onImageFile }, ref) => {
@@ -240,6 +254,10 @@ const MarkdownBlockEditor = forwardRef<MarkdownEditorApi, { source: string; read
     },
     insertDivider() { const current = latestBlocks(); const id = selectionBlockId() ?? activeId ?? current[current.length - 1]?.id; if (id) insertAfter(id, { id: makeId("md"), type: "divider", text: "" }); },
     insertImage: insertImageAfterActive,
+    getSelectedText() {
+      const selection = window.getSelection();
+      return selection?.rangeCount && rootRef.current?.contains(selection.anchorNode) ? selection.toString().trim() : "";
+    },
   }));
 
   const handleInput = (event: React.FormEvent<HTMLElement>) => {
@@ -326,12 +344,13 @@ function makePlanNode(plan: Plan, index: number, data: Omit<PlanNodeData, "plan"
   return {
     id: plan.id,
     type: "plan",
-    position: previousPosition ?? { x: plan.graphX ?? index * 400 + 50, y: plan.graphY ?? 80 + (index % 2) * 70 },
+    position: previousPosition ?? { x: plan.graphX ?? index * 720 + 50, y: plan.graphY ?? 80 + (index % 2) * 70 },
     data: {
       ...data,
       plan,
       recordCount: data.entries.filter((entry) => entry.planId === plan.id).length,
       childCount: data.plans.filter((child) => child.parentId === plan.id).length,
+      questions: data.questions.filter((question) => question.sourcePlanId === plan.id),
       expanded: data.expandedIds.has(plan.id),
     },
   };
@@ -348,6 +367,7 @@ function PlanGraphNode({ data, selected }: NodeProps<PlanFlowNode>) {
       <Handle type="target" position={Position.Left} className="graph-handle" />
       <header className={`graph-node-banner graph-status-${plan.status}`}><h3>{plan.title}</h3><div className="node-title-actions"><button className={`expand-level nodrag expand-status-${plan.status}`} aria-label={childCount > 0 ? `${data.expanded ? "收起" : "展开"} ${plan.title} 的子级计划` : `为 ${plan.title} 创建子级计划`} onClick={(event) => { event.stopPropagation(); if (childCount > 0) data.onToggle(plan.id); else onAddChild(plan.id); }}>{childCount > 0 ? (data.expanded ? "收起" : "展开") : "+"}</button><button className={`focus-level nodrag expand-status-${plan.status}`} aria-label={`聚焦查看 ${plan.title}`} title="聚焦查看" onClick={(event) => { event.stopPropagation(); onFocus(plan.id); }}>⤢</button></div></header>
       <div className="graph-node-body"><p>{plan.summary || "尚未填写探索说明。"}</p></div>
+      {data.questions.length > 0 && <aside className="graph-question-sidecar nodrag nowheel" aria-label={`${plan.title} 的问题列表`} onClick={(event) => event.stopPropagation()}><header><strong>问题记录</strong><span>{data.questions.length}</span></header><QuestionSummaryList questions={data.questions} comments={data.questionComments} links={data.questionExperimentLinks} onSelect={data.onSelectQuestion} compact /></aside>}
       {data.expanded && childCount > 0 && <InlinePlanCanvas parentData={data} />}
       <footer className={`node-dates graph-date-${plan.status}`}><time>{plan.status === "已完成" ? (plan.completedAt || "未记录") : (plan.plannedCompletionDate || "未设置")}</time></footer>
       <div className="node-hover-actions nodrag nowheel" onClick={(event) => event.stopPropagation()}>
@@ -356,6 +376,7 @@ function PlanGraphNode({ data, selected }: NodeProps<PlanFlowNode>) {
           <button className={`status-menu-trigger action-status-${nextStatus}`} aria-label={`选择 ${plan.title} 的状态`} aria-expanded={statusMenuOpen} onClick={() => setStatusMenuOpen((open) => !open)}>⌄</button>
           {statusMenuOpen && <div className="node-status-menu" role="menu">{statuses.filter((status) => status !== plan.status).map((status) => <button key={status} role="menuitem" className={`status-option status-option-${status}`} onClick={() => { data.onChangeStatus(plan.id, status); setStatusMenuOpen(false); }}><i />{status}</button>)}</div>}
         </div>
+        <button className="node-question-action" aria-label={`为 ${plan.title} 记录问题`} onClick={() => data.onCreateQuestion(plan.id)}>＋ 问题</button>
         <button className="node-delete-action" aria-label={`删除 ${plan.title}`} onClick={() => data.onDeletePlan(plan.id)}>删除</button>
       </div>
       <Handle type="source" position={Position.Right} className="graph-handle" />
@@ -393,7 +414,7 @@ function InlinePlanCanvas({ parentData }: { parentData: PlanNodeData }) {
   </div>;
 }
 
-export default function WorkspaceClient({ viewer }: { viewer: { displayName: string; role: "owner" | "member" } }) {
+export default function WorkspaceClient({ viewer }: { viewer: { id: string; displayName: string; role: "owner" | "member" } }) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
@@ -405,6 +426,11 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
   const [entries, setEntries] = useState<Entry[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dependencies, setDependencies] = useState<Dependency[]>([]);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [questionComments, setQuestionComments] = useState<QuestionComment[]>([]);
+  const [questionExperimentLinks, setQuestionExperimentLinks] = useState<QuestionExperimentLink[]>([]);
+  const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(null);
+  const [questionDraft, setQuestionDraft] = useState<{ planId: string; sourceExcerpt: string } | null>(null);
   const [graphFocus, setGraphFocus] = useState<string | null>(null);
   const [graphNodes, setGraphNodes, onGraphNodesChange] = useNodesState<PlanFlowNode>([]);
   const [graphNotice, setGraphNotice] = useState("");
@@ -415,7 +441,7 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
   const [notebookDocs, setNotebookDocs] = useState<Record<string, string>>({});
   const [documentSaveStatus, setDocumentSaveStatus] = useState<Record<string, string>>({});
   const [notebookEditorId, setNotebookEditorId] = useState<string | null>(null);
-  const [drawerTab, setDrawerTab] = useState<"overview" | "entries" | "attachments">("overview");
+  const [drawerTab, setDrawerTab] = useState<"overview" | "entries" | "attachments" | "questions">("overview");
   const notebookEditorRef = useRef<MarkdownEditorApi>(null);
   const notebookImageInputRef = useRef<HTMLInputElement>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
@@ -501,8 +527,8 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
   useEffect(() => {
     if (!currentProjectId) {
       workspaceRepositoryRef.current = null;
-      setPlans([]); setDependencies([]); setEntries([]); setAttachments([]); setNotebookDocs({});
-      setSelectedId(null); setGraphFocus(null); setServerReady(false); setHydrated(true);
+      setPlans([]); setDependencies([]); setEntries([]); setAttachments([]); setNotebookDocs({}); setQuestions([]); setQuestionComments([]); setQuestionExperimentLinks([]);
+      setSelectedId(null); setSelectedQuestionId(null); setGraphFocus(null); setServerReady(false); setHydrated(true);
       return;
     }
     let cancelled = false;
@@ -511,15 +537,15 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
     Object.values(documentSaveTimersRef.current).forEach((timer) => clearTimeout(timer));
     documentSaveTimersRef.current = {};
     setHydrated(false); setServerReady(false); setStorageMessage("正在读取项目…");
-    setPlans([]); setDependencies([]); setEntries([]); setAttachments([]); setNotebookDocs({});
-    setSelectedId(null); setSelectedDependencyId(null); setGraphFocus(null);
+    setPlans([]); setDependencies([]); setEntries([]); setAttachments([]); setNotebookDocs({}); setQuestions([]); setQuestionComments([]); setQuestionExperimentLinks([]);
+    setSelectedId(null); setSelectedQuestionId(null); setSelectedDependencyId(null); setGraphFocus(null);
     const repository = new LocalWorkspaceRepository(window.localStorage, `eln-plan-demo-v3:${currentProjectId}`);
     workspaceRepositoryRef.current = repository;
     void Promise.all([
       repository.load().catch(() => null),
       fetch(`/api/workspace?projectId=${encodeURIComponent(currentProjectId)}`, { cache: "no-store", signal: controller.signal }).then(async (response) => {
         if (!response.ok) throw new Error((await response.json().catch(() => null) as { error?: string } | null)?.error ?? "项目读取失败。");
-        return response.json() as Promise<{ project: { version: number }; plans: Plan[]; dependencies: Dependency[]; documents: Record<string, ServerDocument>; entries: Entry[]; attachments: Attachment[] }>;
+        return response.json() as Promise<{ project: { version: number }; plans: Plan[]; dependencies: Dependency[]; documents: Record<string, ServerDocument>; entries: Entry[]; attachments: Attachment[]; questions: Question[]; questionComments: QuestionComment[]; questionExperimentLinks: QuestionExperimentLink[] }>;
       }),
     ]).then(([saved, server]) => {
       if (cancelled) return;
@@ -527,6 +553,9 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
       setDependencies(server.dependencies);
       setEntries(server.entries);
       setAttachments(server.attachments);
+      setQuestions(server.questions);
+      setQuestionComments(server.questionComments);
+      setQuestionExperimentLinks(server.questionExperimentLinks);
       setNotebookDocs(Object.fromEntries(Object.entries(server.documents).map(([planId, document]) => [planId, document.content])));
       documentVersionsRef.current = Object.fromEntries(Object.entries(server.documents).map(([planId, document]) => [planId, document.version]));
       projectVersionRef.current = server.project.version;
@@ -536,7 +565,7 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
         setGraphExpanded(new Set(saved.graphExpanded));
         setViewStates(saved.viewStates);
         if (!server.plans.length && saved.plans.length) setLocalMigrationData(saved);
-        if (!server.entries.length && !Object.keys(server.documents).length && (saved.entries.length || Object.keys(saved.notebookDocs).length)) setLocalContentMigrationData(saved);
+        if (!server.entries.length && !Object.keys(server.documents).length && !server.questions.length && (saved.entries.length || Object.keys(saved.notebookDocs).length || saved.questions.length)) setLocalContentMigrationData(saved);
       }
       localStorage.setItem("atlas-last-project-id", currentProjectId);
       const url = new URL(window.location.href); url.searchParams.set("projectId", currentProjectId); window.history.replaceState(null, "", url);
@@ -553,13 +582,13 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
   useEffect(() => {
     const repository = workspaceRepositoryRef.current;
     if (!hydrated || !repository) return;
-    const data = { plans, entries, dependencies, graphExpanded: Array.from(graphExpanded), viewStates, notebookDocs } satisfies WorkspaceData;
+    const data = { plans, entries, dependencies, graphExpanded: Array.from(graphExpanded), viewStates, notebookDocs, questions, questionComments, questionExperimentLinks } satisfies WorkspaceData;
     void repository.save(data).then(() => {
       // 本机只保留文档草稿、界面状态和可导出的缓存；计划事实源是服务器。
     }).catch(() => {
       setStorageMessage("本机草稿保存失败，请立即导出备份");
     });
-  }, [plans, entries, dependencies, graphExpanded, viewStates, notebookDocs, hydrated]);
+  }, [plans, entries, dependencies, graphExpanded, viewStates, notebookDocs, questions, questionComments, questionExperimentLinks, hydrated]);
 
   useEffect(() => {
     if (!hydrated || !serverReady) return;
@@ -645,18 +674,21 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
     return result;
   };
 
-  const replaceTeamContent = async (data: Pick<WorkspaceData, "entries" | "notebookDocs">, mode: "replace" | "if-empty") => {
+  const replaceTeamContent = async (data: Pick<WorkspaceData, "entries" | "notebookDocs" | "questions" | "questionComments" | "questionExperimentLinks">, mode: "replace" | "if-empty") => {
     if (!currentProjectId) throw new Error("请先选择项目。");
     const response = await fetch(`/api/workspace/content/replace?projectId=${encodeURIComponent(currentProjectId)}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mode, documents: data.notebookDocs, entries: data.entries }),
+      body: JSON.stringify({ mode, documents: data.notebookDocs, entries: data.entries, questions: data.questions, questionComments: data.questionComments, questionExperimentLinks: data.questionExperimentLinks }),
     });
-    const result = await response.json() as { documents?: Record<string, ServerDocument>; entries?: Entry[]; error?: string };
-    if (!response.ok || !result.documents || !result.entries) throw new Error(result.error ?? "团队内容迁移失败。");
+    const result = await response.json() as { documents?: Record<string, ServerDocument>; entries?: Entry[]; questions?: Question[]; questionComments?: QuestionComment[]; questionExperimentLinks?: QuestionExperimentLink[]; error?: string };
+    if (!response.ok || !result.documents || !result.entries || !result.questions || !result.questionComments || !result.questionExperimentLinks) throw new Error(result.error ?? "团队内容迁移失败。");
     setNotebookDocs(Object.fromEntries(Object.entries(result.documents).map(([planId, document]) => [planId, document.content])));
     documentVersionsRef.current = Object.fromEntries(Object.entries(result.documents).map(([planId, document]) => [planId, document.version]));
     setEntries(result.entries);
+    setQuestions(result.questions);
+    setQuestionComments(result.questionComments);
+    setQuestionExperimentLinks(result.questionExperimentLinks);
     return result;
   };
 
@@ -664,7 +696,7 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
     if (!localMigrationData || !window.confirm(`检测到本机保存的 ${localMigrationData.plans.length} 个计划。是否将其迁移到当前团队项目？`)) return;
     try {
       await replaceTeamPlans(localMigrationData);
-      if (localMigrationData.entries.length || Object.keys(localMigrationData.notebookDocs).length) await replaceTeamContent(localMigrationData, "if-empty");
+      if (localMigrationData.entries.length || Object.keys(localMigrationData.notebookDocs).length || localMigrationData.questions.length) await replaceTeamContent(localMigrationData, "if-empty");
       setLocalMigrationData(null);
       setLocalContentMigrationData(null);
       setStorageMessage("本机计划已迁移到团队服务器");
@@ -674,7 +706,7 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
   };
 
   const migrateLocalContent = async () => {
-    if (!localContentMigrationData || !window.confirm(`检测到本机保存的 ${Object.keys(localContentMigrationData.notebookDocs).length} 份文档和 ${localContentMigrationData.entries.length} 条事件。是否迁移到团队服务器？`)) return;
+    if (!localContentMigrationData || !window.confirm(`检测到本机保存的 ${Object.keys(localContentMigrationData.notebookDocs).length} 份文档、${localContentMigrationData.entries.length} 条事件和 ${localContentMigrationData.questions.length} 个问题。是否迁移到团队服务器？`)) return;
     try {
       await replaceTeamContent(localContentMigrationData, "if-empty");
       setLocalContentMigrationData(null);
@@ -722,6 +754,7 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
       }
       const data = readBackupFile(parsed);
       if (!window.confirm(`将用备份中的 ${data.plans.length} 个计划替换团队服务器中的当前计划，同时恢复本机文档和记录，是否继续？`)) return;
+      await replaceTeamContent({ entries: [], notebookDocs: {}, questions: [], questionComments: [], questionExperimentLinks: [] }, "replace");
       await replaceTeamPlans(data);
       await replaceTeamContent(data, "replace");
       setGraphExpanded(new Set(data.graphExpanded));
@@ -764,9 +797,22 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
   };
 
   const selected = plans.find((plan) => plan.id === selectedId) ?? null;
+  const selectedQuestion = questions.find((question) => question.id === selectedQuestionId) ?? null;
   const selectedDependency = dependencies.find((item) => item.id === selectedDependencyId) ?? null;
   const childrenOf = (id: string | null) => plans.filter((plan) => plan.parentId === id);
   const descendantSetOf = (id: string) => collectDescendantIds(plans, id);
+
+  function selectQuestion(id: string) {
+    if (!questions.some((question) => question.id === id)) return;
+    setSelectedId(null); setSelectedDependencyId(null); setSelectedQuestionId(id); setShowProjectDrawer(false);
+  }
+
+  const mergeQuestionBundle = (bundle: QuestionBundle) => {
+    const ids = new Set(bundle.questions.map((question) => question.id));
+    setQuestions((current) => [...current.filter((question) => !ids.has(question.id)), ...bundle.questions].sort((a, b) => a.number - b.number));
+    setQuestionComments((current) => [...current.filter((comment) => !ids.has(comment.questionId)), ...bundle.questionComments]);
+    setQuestionExperimentLinks((current) => [...current.filter((link) => !ids.has(link.questionId)), ...bundle.questionExperimentLinks]);
+  };
 
   const sidebarRows = useMemo(() => buildVisiblePlanTree(plans, expanded, search), [plans, expanded, search]);
 
@@ -859,6 +905,8 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
       window.removeEventListener("mousemove", trackMouse);
       window.removeEventListener("mouseup", releaseMouse);
     };
+  // Handler identities change on render; their state inputs are listed explicitly.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hierarchyDrag?.id, graphFocus, plans]);
   const selectDependencyAt = (id: string, event: React.MouseEvent) => {
     const bounds = graphCanvasRef.current?.getBoundingClientRect();
@@ -882,6 +930,9 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
         plans,
         entries,
         dependencies,
+        questions,
+        questionComments,
+        questionExperimentLinks,
         expandedIds: graphExpanded,
         getViewport: (id: string) => viewStatesRef.current[id],
         selectedDependencyId,
@@ -899,13 +950,19 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
         onBeginHierarchyDrag: beginHierarchyDrag,
         onMoveHierarchyDrag: moveHierarchyDrag,
         onEndHierarchyDrag: endHierarchyDrag,
+        onSelectQuestion: selectQuestion,
+        onCreateQuestion: (planId: string) => setQuestionDraft({ planId, sourceExcerpt: "" }),
       };
-      return levelPlans.map((plan, index) => makePlanNode(plan, index, sharedData, positions.get(plan.id)));
+      const planNodes = levelPlans.map((plan, index) => makePlanNode(plan, index, sharedData, positions.get(plan.id)));
+      return planNodes;
     });
-  }, [plans, entries, dependencies, graphExpanded, selectedDependencyId, graphFocus, setGraphNodes]);
+  // Graph handlers intentionally read the same state snapshots listed below.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plans, entries, dependencies, questions, questionComments, questionExperimentLinks, graphExpanded, selectedDependencyId, graphFocus, setGraphNodes]);
 
   const graphEdges = useMemo<Edge[]>(() => {
-    return dependencyEdges(dependencies, new Set(graphNodes.map((node) => node.id)), selectedDependencyId);
+    const visibleIds = new Set(graphNodes.map((node) => node.id));
+    return dependencyEdges(dependencies, visibleIds, selectedDependencyId);
   }, [dependencies, graphNodes, selectedDependencyId]);
 
   function tryAddDependency(source: string, target: string) {
@@ -936,6 +993,13 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
       const completedAt = status === "已完成" && plan.status !== "已完成" ? localDateString() : plan.completedAt;
       return { ...plan, status, completedAt, updatedAt: "刚刚" };
     }));
+    if (status === "已完成") {
+      const pendingLink = questionExperimentLinks.find((link) => link.planId === id && link.outcome === "待回填");
+      if (pendingLink) {
+        setGraphNotice(`验证实验已完成，请回填 ${questionCode(questions.find((question) => question.id === pendingLink.questionId)?.number ?? 0)} 的结果`);
+        setTimeout(() => setGraphNotice(""), 4200);
+      }
+    }
   }
 
   function deletePlan(id: string) {
@@ -944,6 +1008,7 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
     const directChildren = plans.filter((candidate) => candidate.parentId === id);
     if (directChildren.length) { window.alert("请先移动或逐个删除该计划的下级计划。"); return; }
     if (dependencies.some((dependency) => dependency.sourceId === id || dependency.targetId === id)) { window.alert("请先解除该计划的执行依赖。"); return; }
+    if (questions.some((question) => question.sourcePlanId === id) || questionExperimentLinks.some((link) => link.planId === id)) { window.alert("该计划仍被问题记录引用，请先处理相关问题或验证关系。"); return; }
     const deletingIds = descendantSetOf(id);
     const childCount = deletingIds.size - 1;
     const prompt = childCount > 0
@@ -998,6 +1063,83 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
     setShowProjectDrawer(false);
     setNotebookEditorId(planId);
     setSelectedId(null);
+    setSelectedQuestionId(null);
+  };
+
+  const createQuestion = async (input: { title: string; context: string; sourceExcerpt: string }) => {
+    if (!currentProjectId || !questionDraft) throw new Error("请先选择来源实验。");
+    const response = await fetch(`/api/workspace/questions?projectId=${encodeURIComponent(currentProjectId)}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sourcePlanId: questionDraft.planId, ...input }),
+    });
+    const result = await response.json() as QuestionBundle & { error?: string };
+    if (!response.ok || !result.questions?.length) throw new Error(result.error ?? "问题保存失败。");
+    mergeQuestionBundle(result); setQuestionDraft(null); setSelectedQuestionId(result.questions[0].id); setSelectedId(null); setStorageMessage("问题已保存到团队服务器");
+  };
+
+  const updateQuestion = async (question: Question, patch: { title: string; context: string; status: QuestionStatus; resolution: string }) => {
+    if (!currentProjectId) throw new Error("请先选择项目。");
+    const response = await fetch(`/api/workspace/questions/${encodeURIComponent(question.id)}?projectId=${encodeURIComponent(currentProjectId)}`, {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: question.version, ...patch }),
+    });
+    const result = await response.json() as QuestionBundle & { error?: string };
+    if (!response.ok || !result.questions?.length) throw new Error(result.error ?? "问题保存失败。");
+    mergeQuestionBundle(result); setStorageMessage("问题已保存到团队服务器");
+  };
+
+  const addQuestionComment = async (question: Question, content: string) => {
+    if (!currentProjectId) throw new Error("请先选择项目。");
+    const response = await fetch(`/api/workspace/questions/${encodeURIComponent(question.id)}/comments?projectId=${encodeURIComponent(currentProjectId)}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content }),
+    });
+    const result = await response.json() as QuestionBundle & { error?: string };
+    if (!response.ok || !result.questions?.length) throw new Error(result.error ?? "讨论保存失败。");
+    mergeQuestionBundle(result); setStorageMessage("讨论已保存到团队服务器");
+  };
+
+  const editQuestionComment = async (question: Question, comment: QuestionComment, content: string) => {
+    if (!currentProjectId) throw new Error("请先选择项目。");
+    const response = await fetch(`/api/workspace/questions/${encodeURIComponent(question.id)}/comments/${encodeURIComponent(comment.id)}?projectId=${encodeURIComponent(currentProjectId)}`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: comment.version, content }),
+    });
+    const result = await response.json() as QuestionBundle & { error?: string };
+    if (!response.ok || !result.questions?.length) throw new Error(result.error ?? "讨论修改失败。");
+    mergeQuestionBundle(result); setStorageMessage("讨论已更新");
+  };
+
+  const deleteQuestionComment = async (question: Question, comment: QuestionComment) => {
+    if (!currentProjectId) throw new Error("请先选择项目。");
+    const response = await fetch(`/api/workspace/questions/${encodeURIComponent(question.id)}/comments/${encodeURIComponent(comment.id)}?projectId=${encodeURIComponent(currentProjectId)}`, {
+      method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: comment.version }),
+    });
+    const result = await response.json() as QuestionBundle & { error?: string };
+    if (!response.ok || !result.questions?.length) throw new Error(result.error ?? "讨论删除失败。");
+    mergeQuestionBundle(result); setStorageMessage("讨论已删除并保留审计记录");
+  };
+
+  const createQuestionExperiment = async (question: Question, input: { title: string; domain: Domain; summary: string; plannedCompletionDate?: string }) => {
+    if (!currentProjectId) throw new Error("请先选择项目。");
+    if (JSON.stringify({ plans, dependencies }) !== lastServerSnapshotRef.current) throw new Error("计划网络仍在保存，请等待“已保存到团队服务器”后重试。");
+    const response = await fetch(`/api/workspace/questions/${encodeURIComponent(question.id)}/experiments?projectId=${encodeURIComponent(currentProjectId)}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectVersion: projectVersionRef.current, questionVersion: question.version, ...input }),
+    });
+    const result = await response.json() as QuestionBundle & { project?: { version: number }; plan?: Plan; dependency?: Dependency; error?: string };
+    if (!response.ok || !result.project || !result.plan || !result.dependency || !result.questions?.length) throw new Error(result.error ?? "验证实验创建失败。");
+    const nextPlans = [...plans, result.plan]; const nextDependencies = [...dependencies, result.dependency];
+    projectVersionRef.current = result.project.version;
+    lastServerSnapshotRef.current = JSON.stringify({ plans: nextPlans, dependencies: nextDependencies });
+    setProjects((current) => current.map((project) => project.id === currentProjectId ? { ...project, version: result.project!.version } : project));
+    setPlans(nextPlans); setDependencies(nextDependencies); mergeQuestionBundle(result);
+    setStorageMessage("验证实验已创建，并已建立问题溯源");
+  };
+
+  const updateQuestionLink = async (question: Question, link: QuestionExperimentLink, outcome: VerificationOutcome, note: string) => {
+    if (!currentProjectId) throw new Error("请先选择项目。");
+    const response = await fetch(`/api/workspace/questions/${encodeURIComponent(question.id)}/links/${encodeURIComponent(link.planId)}?projectId=${encodeURIComponent(currentProjectId)}`, {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: link.version, outcome, note }),
+    });
+    const result = await response.json() as QuestionBundle & { error?: string };
+    if (!response.ok || !result.questions?.length) throw new Error(result.error ?? "验证结果保存失败。");
+    mergeQuestionBundle(result); setStorageMessage("验证结果已保存");
   };
 
   const createEntry = async (event: FormEvent<HTMLFormElement>, planId: string) => {
@@ -1051,8 +1193,9 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
   const restoreExample = async () => {
     if (!window.confirm("这会用演示计划、文档和实验事件替换团队服务器中的当前内容，是否继续？")) return;
     try {
+      await replaceTeamContent({ entries: [], notebookDocs: {}, questions: [], questionComments: [], questionExperimentLinks: [] }, "replace");
       await replaceTeamPlans({ plans: seedPlans, dependencies: seedDependencies });
-      await replaceTeamContent({ entries: seedEntries, notebookDocs: {} }, "replace");
+      await replaceTeamContent({ entries: seedEntries, notebookDocs: {}, questions: [], questionComments: [], questionExperimentLinks: [] }, "replace");
       setGraphExpanded(new Set(["p1"]));
       setViewStates({});
       setGraphFocus(null);
@@ -1126,7 +1269,7 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
   }, [plans, graphFocus]);
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${selectedQuestion ? "question-panel-open" : ""}`}>
       <header className="topbar">
         <nav className="topnav" aria-label="项目导航"><button className="active">计划管理</button><button>项目记录</button><button>数据概览</button></nav>
         <div className="top-actions"><span className="viewer-name">{viewer.displayName}</span>{viewer.role === "owner" && <a href="/admin/users">账户管理</a>}<form action="/api/auth/logout" method="post"><button type="submit" className="logout-button">退出</button></form></div>
@@ -1178,9 +1321,9 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
               nodesConnectable={canEditWorkspace}
               nodeTypes={nodeTypes}
               onNodesChange={onGraphNodesChange}
-              onNodeClick={(_, node) => { setSelectedDependencyId(null); setEdgeStyleMenuOpen(false); setSelectedId(node.id); }}
+              onNodeClick={(_, node) => { setSelectedDependencyId(null); setEdgeStyleMenuOpen(false); setSelectedQuestionId(null); setSelectedId(node.id); }}
               onNodeDoubleClick={(_, node) => openMarkdownEditor(node.id)}
-              onEdgeClick={(event, edge) => { event.stopPropagation(); selectDependencyAt(edge.id, event); }}
+              onEdgeClick={(event, edge) => { if (!dependencies.some((dependency) => dependency.id === edge.id)) return; event.stopPropagation(); selectDependencyAt(edge.id, event); }}
               onPaneClick={() => { setSelectedDependencyId(null); setEdgeStyleMenuOpen(false); }}
               onNodeDragStop={(event, node) => {
                 movePlan(node.id, node.position);
@@ -1225,7 +1368,7 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
             {graphNotice && <div className="graph-notice">{graphNotice}</div>}
             {hierarchyDrag && <div className="hierarchy-drag-ghost" style={{ left: hierarchyDrag.x + 12, top: hierarchyDrag.y + 12 }}>⠿ {plans.find((plan) => plan.id === hierarchyDrag.id)?.title}</div>}
           </div>
-          <footer className="graph-footer"><span>{graphNodes.length} 个节点 · {dependencies.filter((item) => graphNodes.some((node) => node.id === item.sourceId) && graphNodes.some((node) => node.id === item.targetId)).length} 条执行依赖</span><span>单击连线可编辑</span></footer>
+          <footer className="graph-footer"><span>{graphNodes.length} 个实验节点 · {questions.filter((question) => graphNodes.some((node) => node.id === question.sourcePlanId)).length} 个问题 · {dependencies.filter((item) => graphNodes.some((node) => node.id === item.sourceId) && graphNodes.some((node) => node.id === item.targetId)).length} 条执行依赖</span><span>单击连线可编辑</span></footer>
         </section>
       </section> : <section className="workspace no-project-workspace">
         <div className="no-project-state"><span>▤</span><h1>{projectsLoaded ? "请选择一个项目" : "正在读取项目…"}</h1><p>选择左侧项目后即可查看实验计划；实验计划必须归属于一个项目。</p><button className="primary-button" onClick={startCreateProject}>＋ 创建项目</button></div>
@@ -1242,13 +1385,14 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
 
       {selected && <aside className={`drawer ${canEditWorkspace ? "" : "plan-drawer-readonly"}`} aria-label="计划详情">
         <div className="drawer-head"><div><p>{selected.domain} · {selected.status}</p><h2>{selected.title}</h2></div><button className="icon-button" aria-label="关闭详情" onClick={() => setSelectedId(null)}><Icon name="close" /></button></div>
-        <div className="drawer-tabs"><button className={drawerTab === "overview" ? "active" : ""} onClick={() => setDrawerTab("overview")}>计划概览</button><button className={drawerTab === "entries" ? "active" : ""} onClick={() => setDrawerTab("entries")}>事件 <span>{selectedEntries.length}</span></button><button className={drawerTab === "attachments" ? "active" : ""} onClick={() => setDrawerTab("attachments")}>附件 <span>{selectedAttachments.length}</span></button><button onClick={() => openMarkdownEditor(selected.id)}>正文</button></div>
+        <div className="drawer-tabs"><button className={drawerTab === "overview" ? "active" : ""} onClick={() => setDrawerTab("overview")}>计划概览</button><button className={drawerTab === "questions" ? "active" : ""} onClick={() => setDrawerTab("questions")}>问题 <span>{questions.filter((question) => question.sourcePlanId === selected.id).length}</span></button><button className={drawerTab === "entries" ? "active" : ""} onClick={() => setDrawerTab("entries")}>事件 <span>{selectedEntries.length}</span></button><button className={drawerTab === "attachments" ? "active" : ""} onClick={() => setDrawerTab("attachments")}>附件 <span>{selectedAttachments.length}</span></button><button onClick={() => openMarkdownEditor(selected.id)}>正文</button></div>
         {!canEditWorkspace && <div className="readonly-banner">当前项目为只读；团队管理员可加入项目或启动应急编辑。</div>}
         {drawerTab === "overview" && <fieldset className="drawer-body overview-form" disabled={!canEditWorkspace}>
           <label>计划名称<input value={selected.title} onChange={(e) => updatePlan(selected.id, { title: e.target.value })} /></label>
           <PlanOverviewFields plan={selected} onUpdate={(patch) => updatePlan(selected.id, patch)} onChangeStatus={(status) => changePlanStatus(selected.id, status)} />
           <div className="subplans"><div className="subplans-head"><h3>子级计划</h3><button onClick={() => { setNewParent(selected.id); setCreateAndFocus(false); setShowCreate(true); }}><Icon name="add" /> 添加</button></div>{childrenOf(selected.id).map((child) => <button key={child.id} onClick={() => setSelectedId(child.id)}><span className={`root-mark domain-${child.domain}`} /> <span>{child.title}</span><small>{child.status}</small></button>)}{childrenOf(selected.id).length === 0 && <p>尚未拆分子级计划。</p>}</div>
         </fieldset>}
+        {drawerTab === "questions" && <div className="drawer-body"><QuestionList planId={selected.id} questions={questions} comments={questionComments} links={questionExperimentLinks} canEdit={canEditWorkspace} onSelect={selectQuestion} onCreate={(planId) => setQuestionDraft({ planId, sourceExcerpt: "" })} /></div>}
         {drawerTab === "entries" && <div className="drawer-body">
           {canEditWorkspace && <form className="new-entry" onSubmit={(event) => void createEntry(event, selected.id)}>
             <div><input name="date" type="date" defaultValue={localDateString()} required /><select name="type" defaultValue="过程">{entryTypes.map((type) => <option key={type}>{type}</option>)}</select></div>
@@ -1272,10 +1416,22 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
         </div>}
       </aside>}
 
+      {selectedQuestion && <QuestionDetailDrawer
+        key={`${selectedQuestion.id}:${selectedQuestion.version}`}
+        question={selectedQuestion} comments={questionComments} links={questionExperimentLinks} plans={plans} canEdit={canEditWorkspace} actorId={viewer.id}
+        onClose={() => setSelectedQuestionId(null)}
+        onUpdate={(patch) => updateQuestion(selectedQuestion, patch)}
+        onAddComment={(content) => addQuestionComment(selectedQuestion, content)}
+        onEditComment={(comment, content) => editQuestionComment(selectedQuestion, comment, content)}
+        onDeleteComment={(comment) => deleteQuestionComment(selectedQuestion, comment)}
+        onCreateExperiment={(input) => createQuestionExperiment(selectedQuestion, input)}
+        onUpdateLink={(link, outcome, note) => updateQuestionLink(selectedQuestion, link, outcome, note)}
+      />}
+
       {notebookEditorPlan && <section className={`markdown-editor-page ${canEditWorkspace ? "" : "readonly"}`} aria-label={`${notebookEditorPlan.title} 实验记录编辑器`}>
         <header className="markdown-editor-head"><div><button className="editor-back" onClick={() => setNotebookEditorId(null)}>← 返回网络图</button><div><span>实验记录 · Markdown</span><h1>{notebookEditorPlan.title}</h1></div></div><p className={(documentSaveStatus[notebookEditorPlan.id] ?? "").includes("冲突") || (documentSaveStatus[notebookEditorPlan.id] ?? "").includes("错误") ? "error" : ""}><i /> {documentSaveStatus[notebookEditorPlan.id] ?? "已连接团队服务器"}</p></header>
-        <div className="markdown-toolbar" role="toolbar" aria-label="Markdown 格式工具"><button title="一级标题" onClick={() => notebookEditorRef.current?.formatBlock("h1")}>H1</button><button title="二级标题" onClick={() => notebookEditorRef.current?.formatBlock("h2")}>H2</button><button title="加粗" onClick={() => notebookEditorRef.current?.wrapSelection("**", "**")}>B</button><button title="斜体" onClick={() => notebookEditorRef.current?.wrapSelection("*", "*")}><em>I</em></button><button title="无序列表" onClick={() => notebookEditorRef.current?.formatBlock("bullet")}>• 列表</button><button title="有序列表" onClick={() => notebookEditorRef.current?.formatBlock("ordered")}>1. 序列</button><button title="任务清单" onClick={() => notebookEditorRef.current?.formatBlock("task")}>☐ 任务</button><button title="引用" onClick={() => notebookEditorRef.current?.formatBlock("quote")}>❯ 引用</button><button title="行内代码" onClick={() => notebookEditorRef.current?.wrapSelection("`", "`")}>&lt;/&gt;</button><button title="代码块" onClick={() => notebookEditorRef.current?.formatBlock("code")}>代码块</button><button title="链接" onClick={() => notebookEditorRef.current?.wrapSelection("[", "](https://)", "链接文字")}>链接</button><button title="插入图片" onClick={() => notebookImageInputRef.current?.click()}>▧ 图片</button><input ref={notebookImageInputRef} className="image-file-input" type="file" accept="image/*" onChange={(event) => { insertNotebookImage(event.target.files?.[0]); event.target.value = ""; }} /><button title="分隔线" onClick={() => notebookEditorRef.current?.insertDivider()}>—</button><span className="toolbar-hint">可直接粘贴剪贴板图片</span></div>
-        <main className="markdown-editor-main"><MarkdownBlockEditor key={notebookEditorPlan.id} ref={notebookEditorRef} readOnly={!canEditWorkspace} overview={<fieldset className="markdown-plan-overview-fields" disabled={!canEditWorkspace}><legend>计划概览</legend><PlanOverviewFields plan={notebookEditorPlan} showTitle onUpdate={(patch) => updatePlan(notebookEditorPlan.id, patch)} onChangeStatus={(status) => changePlanStatus(notebookEditorPlan.id, status)} /></fieldset>} source={notebookDocs[notebookEditorPlan.id] ?? ""} onChange={(value) => updateNotebookDocument(notebookEditorPlan.id, value)} onImageFile={async (file) => {
+        <div className="markdown-toolbar" role="toolbar" aria-label="Markdown 格式工具"><button title="一级标题" onClick={() => notebookEditorRef.current?.formatBlock("h1")}>H1</button><button title="二级标题" onClick={() => notebookEditorRef.current?.formatBlock("h2")}>H2</button><button title="加粗" onClick={() => notebookEditorRef.current?.wrapSelection("**", "**")}>B</button><button title="斜体" onClick={() => notebookEditorRef.current?.wrapSelection("*", "*")}><em>I</em></button><button title="无序列表" onClick={() => notebookEditorRef.current?.formatBlock("bullet")}>• 列表</button><button title="有序列表" onClick={() => notebookEditorRef.current?.formatBlock("ordered")}>1. 序列</button><button title="任务清单" onClick={() => notebookEditorRef.current?.formatBlock("task")}>☐ 任务</button><button title="引用" onClick={() => notebookEditorRef.current?.formatBlock("quote")}>❯ 引用</button><button title="行内代码" onClick={() => notebookEditorRef.current?.wrapSelection("`", "`")}>&lt;/&gt;</button><button title="代码块" onClick={() => notebookEditorRef.current?.formatBlock("code")}>代码块</button><button title="链接" onClick={() => notebookEditorRef.current?.wrapSelection("[", "](https://)", "链接文字")}>链接</button><button title="插入图片" onClick={() => notebookImageInputRef.current?.click()}>▧ 图片</button><input ref={notebookImageInputRef} className="image-file-input" type="file" accept="image/*" onChange={(event) => { insertNotebookImage(event.target.files?.[0]); event.target.value = ""; }} /><button title="分隔线" onClick={() => notebookEditorRef.current?.insertDivider()}>—</button>{canEditWorkspace && <button className="question-toolbar-button" title="将正文选中内容记录为问题" onMouseDown={(event) => { event.preventDefault(); setQuestionDraft({ planId: notebookEditorPlan.id, sourceExcerpt: notebookEditorRef.current?.getSelectedText() ?? "" }); }}>？ 问题</button>}<span className="toolbar-hint">可直接粘贴剪贴板图片</span></div>
+        <main className="markdown-editor-main"><MarkdownBlockEditor key={notebookEditorPlan.id} ref={notebookEditorRef} readOnly={!canEditWorkspace} overview={<><fieldset className="markdown-plan-overview-fields" disabled={!canEditWorkspace}><legend>计划概览</legend><PlanOverviewFields plan={notebookEditorPlan} showTitle onUpdate={(patch) => updatePlan(notebookEditorPlan.id, patch)} onChangeStatus={(status) => changePlanStatus(notebookEditorPlan.id, status)} /></fieldset><QuestionList planId={notebookEditorPlan.id} questions={questions} comments={questionComments} links={questionExperimentLinks} canEdit={canEditWorkspace} onSelect={selectQuestion} onCreate={(planId) => setQuestionDraft({ planId, sourceExcerpt: "" })} /></>} source={notebookDocs[notebookEditorPlan.id] ?? ""} onChange={(value) => updateNotebookDocument(notebookEditorPlan.id, value)} onImageFile={async (file) => {
           setDocumentSaveStatus((current) => ({ ...current, [notebookEditorPlan.id]: "正在上传粘贴的图片…" }));
           try {
             const attachment = await uploadAttachment(file, notebookEditorPlan.id);
@@ -1289,6 +1445,7 @@ export default function WorkspaceClient({ viewer }: { viewer: { displayName: str
       </section>}
 
       {showCreate && <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowCreate(false)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="create-title" onMouseDown={(e) => e.stopPropagation()}><div className="modal-head"><div><p>NEW EXPLORATION</p><h2 id="create-title">新建探索计划</h2></div><button className="icon-button" aria-label="关闭" onClick={() => setShowCreate(false)}><Icon name="close" /></button></div><form onSubmit={createPlan}><label>计划名称<input name="title" required autoFocus placeholder="例如：候选蛋白复测" /></label><label>所属父级计划 <small>作为该计划的细分子级</small><select name="parentId" defaultValue={newParent ?? ""}><option value="">无（顶级计划）</option>{plans.map((plan) => <option value={plan.id} key={plan.id}>{plan.title}</option>)}</select></label><label>前置计划 <small>需要先开展的计划，可稍后添加多个</small><select name="prerequisiteId" defaultValue=""><option value="">无</option>{plans.map((plan) => <option value={plan.id} key={plan.id}>{plan.title}</option>)}</select></label><div className="form-grid"><label>领域<select name="domain" defaultValue="综合">{domains.map((domain) => <option key={domain}>{domain}</option>)}</select></label><label>计划完成日期<input name="plannedCompletionDate" type="date" /></label></div><label>简要描述<textarea name="summary" rows={3} placeholder="说明这个方向需要探索什么" /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setShowCreate(false)}>取消</button><button type="submit" className="primary-button">创建计划</button></div></form></section></div>}
+      {questionDraft && <QuestionCreateDialog planTitle={plans.find((plan) => plan.id === questionDraft.planId)?.title ?? "未知实验"} sourceExcerpt={questionDraft.sourceExcerpt} onClose={() => setQuestionDraft(null)} onSubmit={createQuestion} />}
     </main>
   );
 }

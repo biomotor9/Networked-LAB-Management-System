@@ -140,6 +140,68 @@ export const entries = pgTable("entries", {
   index("entries_project_plan_idx").on(table.projectId, table.planId),
 ]);
 
+export const questions = pgTable("questions", {
+  key: text("key").primaryKey(),
+  id: text("id").notNull(),
+  projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  sourcePlanKey: text("source_plan_key").notNull().references(() => plans.key, { onDelete: "cascade" }),
+  sourcePlanId: text("source_plan_id").notNull(),
+  number: integer("number").notNull(),
+  title: text("title").notNull(),
+  context: text("context").notNull().default(""),
+  sourceExcerpt: text("source_excerpt").notNull().default(""),
+  status: text("status", { enum: ["待解答", "待验证", "已解决", "已搁置"] }).notNull().default("待解答"),
+  resolution: text("resolution").notNull().default(""),
+  version: integer("version").notNull().default(1),
+  createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+  resolvedBy: text("resolved_by").references(() => users.id, { onDelete: "set null" }),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("questions_project_id_unique").on(table.projectId, table.id),
+  uniqueIndex("questions_project_number_unique").on(table.projectId, table.number),
+  index("questions_project_plan_idx").on(table.projectId, table.sourcePlanId),
+  index("questions_project_status_idx").on(table.projectId, table.status),
+  check("questions_number_positive", sql`${table.number} > 0`),
+]);
+
+export const questionComments = pgTable("question_comments", {
+  key: text("key").primaryKey(),
+  id: text("id").notNull(),
+  projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  questionKey: text("question_key").notNull().references(() => questions.key, { onDelete: "cascade" }),
+  questionId: text("question_id").notNull(),
+  content: text("content").notNull(),
+  version: integer("version").notNull().default(1),
+  createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+  updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("question_comments_project_id_unique").on(table.projectId, table.id),
+  index("question_comments_question_idx").on(table.projectId, table.questionId, table.createdAt),
+]);
+
+export const questionExperimentLinks = pgTable("question_experiment_links", {
+  key: text("key").primaryKey(),
+  projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  questionKey: text("question_key").notNull().references(() => questions.key, { onDelete: "cascade" }),
+  questionId: text("question_id").notNull(),
+  planKey: text("plan_key").notNull().references(() => plans.key, { onDelete: "cascade" }),
+  planId: text("plan_id").notNull(),
+  outcome: text("outcome", { enum: ["待回填", "支持", "否定", "不确定"] }).notNull().default("待回填"),
+  note: text("note").notNull().default(""),
+  version: integer("version").notNull().default(1),
+  createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("question_experiment_links_pair_unique").on(table.projectId, table.questionId, table.planId),
+  index("question_experiment_links_plan_idx").on(table.projectId, table.planId),
+]);
+
 export const attachments = pgTable("attachments", {
   key: text("key").primaryKey(),
   id: text("id").notNull(),

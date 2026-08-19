@@ -22,6 +22,8 @@ function activityLabel(action: string): string {
     "project.emergency_edit_started": "启动了管理员应急编辑", "project.emergency_edit_ended": "结束了管理员应急编辑",
     "attachment.upload": "上传了附件", "attachment.delete": "删除了附件", "workspace.replaced": "更新了实验计划网络",
     "document.updated": "更新了实验正文", "entry.created": "创建了实验事件", "entry.updated": "更新了实验事件", "entry.deleted": "删除了实验事件",
+    "question.created": "记录了实验问题", "question.updated": "更新了问题状态或结论", "question.comment_created": "参与了问题讨论",
+    "question.comment_updated": "编辑了问题讨论", "question.comment_deleted": "删除了问题讨论", "question.experiment_created": "从问题创建了验证实验", "question.verification_updated": "回填了验证结果",
     "project.migrated": "由系统迁移为项目",
   };
   return labels[action] ?? action;
@@ -116,14 +118,20 @@ export default function ProjectDrawer({
     if (!project) return;
     const label = action === "complete" ? "完成" : action === "archive" ? "归档" : "恢复";
     if (!window.confirm(`确定${label}项目“${project.name}”吗？`)) return;
-    const call = async (confirmIncomplete = false) => fetch(`/api/projects/${encodeURIComponent(project.id)}/${action}`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: project.version, confirmIncomplete }),
+    const call = async (confirmIncomplete = false, confirmUnresolvedQuestions = false) => fetch(`/api/projects/${encodeURIComponent(project.id)}/${action}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: project.version, confirmIncomplete, confirmUnresolvedQuestions }),
     });
-    let response = await call(); let result = await response.json() as { project?: ProjectDetail; error?: string; code?: string; plans?: Array<{ title: string }> };
+    let confirmedIncomplete = false;
+    let response = await call(); let result = await response.json() as { project?: ProjectDetail; error?: string; code?: string; plans?: Array<{ title: string }>; questions?: Array<{ number: number; title: string }> };
     if (result.code === "INCOMPLETE_PLANS") {
       const names = (result.plans ?? []).slice(0, 10).map((plan) => plan.title).join("、");
       if (!window.confirm(`仍有未完成计划：${names || "若干计划"}。仍要确认项目完成吗？`)) return;
-      response = await call(true); result = await response.json();
+      confirmedIncomplete = true; response = await call(true, false); result = await response.json();
+    }
+    if (result.code === "UNRESOLVED_QUESTIONS") {
+      const names = (result.questions ?? []).slice(0, 10).map((question) => `Q-${String(question.number).padStart(3, "0")} ${question.title}`).join("、");
+      if (!window.confirm(`仍有未解决问题：${names || "若干问题"}。仍要确认项目完成吗？`)) return;
+      response = await call(confirmedIncomplete, true); result = await response.json();
     }
     if (!response.ok || !result.project) { setMessage(result.error ?? `${label}项目失败。`); return; }
     setProject(result.project); const nextForm = formFromProject(result.project); setForm(nextForm); setInitialForm(nextForm); onChanged(result.project);

@@ -6,6 +6,7 @@ import { requireUser } from "../../../lib/auth/session";
 import { projectAccessResponse, requireProjectAccess } from "../../../lib/projects/access";
 import { readProjectContent } from "../../../lib/workspace/content";
 import { readProjectSnapshot } from "../../../lib/workspace/snapshot";
+import { readProjectQuestions } from "../../../lib/workspace/questions";
 
 export async function GET(request: Request) {
   const actor = await requireUser();
@@ -25,7 +26,7 @@ export async function GET(request: Request) {
   const memberships = ids.length ? await db.select({ projectId: projectMembers.projectId, email: users.email, role: projectMembers.role })
     .from(projectMembers).innerJoin(users, eq(users.id, projectMembers.userId)).where(inArray(projectMembers.projectId, ids)) : [];
   const data = await Promise.all(selectedProjects.map(async (project) => {
-    const [snapshot, content] = await Promise.all([readProjectSnapshot(project.id), readProjectContent(project.id)]);
+    const [snapshot, content, questionData] = await Promise.all([readProjectSnapshot(project.id), readProjectContent(project.id), readProjectQuestions(project.id)]);
     return {
       project: {
         name: project.name, description: project.description, status: project.status, startDate: project.startDate,
@@ -35,7 +36,10 @@ export async function GET(request: Request) {
       plans: snapshot.plans, dependencies: snapshot.dependencies,
       documents: Object.fromEntries(Object.entries(content.documents).map(([planId, document]) => [planId, document.content])),
       entries: content.entries,
+      questions: questionData.questions,
+      questionComments: questionData.questionComments,
+      questionExperimentLinks: questionData.questionExperimentLinks,
     };
   }));
-  return NextResponse.json({ format: "atlas-eln-project-backup", version: 2, scope: scope === "team" ? "team" : "project", exportedAt: new Date().toISOString(), includesAttachments: false, projects: data });
+  return NextResponse.json({ format: "atlas-eln-project-backup", version: 3, scope: scope === "team" ? "team" : "project", exportedAt: new Date().toISOString(), includesAttachments: false, projects: data });
 }
