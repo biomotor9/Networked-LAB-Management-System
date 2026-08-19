@@ -473,9 +473,9 @@ docker compose logs -f --tail=100 web
 docker compose up -d --force-recreate web
 ```
 
-#### 构建时进程被终止或出现 OOM
+#### 服务器无法下载构建镜像或构建时出现 OOM
 
-检查 `free -h` 和 `dmesg`，配置 swap，关闭无关任务后重试。仍失败时应在开发机或 CI 构建镜像，再传到服务器，不要提高 Web/PostgreSQL 运行内存上限挤占系统内存。
+不要为解决镜像源、DNS 或内存问题而反复重启生产容器。服务器更新默认使用第 15 节的“本地构建并传输镜像”流程；服务器只负责校验、加载和启动已经验证的镜像。
 
 #### 登录后反复回到登录页
 
@@ -491,17 +491,156 @@ SSH 隧道 HTTP 内测必须使用 `COOKIE_SECURE=false`。修改 `.env` 后执�
 
 ## 15. 更新部署
 
-每次更新遵循“备份 → 上传代码 → 构建 → 启动 → 验收”：
+服务器网络可能无法稳定访问 GitHub、Docker Hub 或 Dockerfile 前端镜像。当前默认更新方式为：
 
-```bash
-cd /opt/atlas-eln
-docker compose exec -T postgres pg_dump -U atlas -d atlas -Fc > "backups/pre-update-$(date +%F-%H%M%S).dump"
+> 正式提交并推送 GitHub → 本地测试和构建 Linux 镜像 → 导出并校验 → SCP 上传 → 服务器加载 → `--no-build` 启动 → 验收
+
+服务器不得直接修改源码，也不在生产机首次编译或试验新版本。以下示例使用当前 Compose 项目名 `nln`、部署目录 `/home/nln`；其他环境必须替换为实际值。
+
+### 15.1 发布前门槛
+
+在 Windows 开发机执行：
+
+```powershell
+cd C:\path\to\nln
+npm run lint
+npm test
+docker compose config --quiet
+git status --short --branch
+git rev-parse HEAD
 ```
 
-使用 Git 时：
+确认测试和生产构建通过、工作区干净，并且当前提交已正式推送到 GitHub。记录完整提交号作为发布标识和回滚依据。
+
+### 15.2 本地构建并导出镜像
+
+在 Windows PowerShell 执行：
+
+```powershell
+$releaseCommit = (git rev-parse --short=7 HEAD).Trim()
+$releaseImage = "nln-web:$releaseCommit"
+$releaseTar = Join-Path $env:TEMP "nln-web-$releaseCommit.tar"
+
+docker build `
+  --build-arg NPM_REGISTRY=https://registry.npmmirror.com `
+  -t $releaseImage .
+
+docker image inspect $releaseImage --format 'id={{.Id}} created={{.Created}} size={{.Size}} arch={{.Architecture}} os={{.Os}}'
+docker save -o $releaseTar $releaseImage
+Get-FileHash -Algorithm SHA256 -LiteralPath $releaseTar
+```
+
+发布镜像必须为 `linux/amd64`，并由刚刚通过测试的同一提交构建。记录镜像 ID、文件大小和 SHA-256。
+
+### 15.3 同步正式提交到服务器 Git 仓库
+
+如果服务器可以访问 GitHub，在服务器使用：
 
 ```bash
-git status
+cd /home/nln
+git pull --ff-only
+```
+
+如果服务器无法访问 GitHub，先在开发机把同一个、已经推送到 GitHub 的提交推送到服务器裸仓库：
+
+```powershell
+git push ssh://<SSH_USER>@<SERVER_IP>/home/nln-release.git HEAD:main
+```
+
+服务器首次使用本地发布镜像时配置部署镜像远程：
+
+```bash
+cd /home/nln
+git remote add deployment-mirror /home/nln-release.git
+git fetch deployment-mirror main
+git branch --set-upstream-to=deployment-mirror/main main
+```
+
+后续更新源码使用：
+
+```bash
+cd /home/nln
+git pull --ff-only deployment-mirror main
+```
+
+更新后 `git rev-parse HEAD` 必须与构建镜像的完整提交号一致，`git status --short --branch` 不得出现源码修改。`origin` 继续保留为正式 GitHub 仓库；`deployment-mirror` 只解决服务器出站网络受限时的 Git 传输。
+
+### 15.4 上传和校验镜像
+
+在 Windows PowerShell 上传：
+
+```powershell
+scp $releaseTar <SSH_USER>@<SERVER_IP>:/root/
+```
+
+在服务器计算校验和，与开发机结果逐字比较：
+
+```bash
+sha256sum "/root/nln-web-<COMMIT>.tar"
+```
+
+校验和不一致时立即停止，不得加载镜像。
+
+### 15.5 备份并保留回滚镜像
+
+先按第 12 节生成同批次数据库和附件备份并验证可读，然后记录并标记当前镜像：
+
+```bash
+cd /home/nln
+docker image inspect nln-web:latest --format '{{.Id}} {{.Created}}'
+docker tag nln-web:latest "nln-web:rollback-$(date +%F-%H%M%S)"
+```
+
+不得删除上一版镜像、数据库备份或附件备份，直到新版本完成验收。
+
+### 15.6 加载并无构建启动
+
+在服务器执行：
+
+```bash
+cd /home/nln
+docker load -i "/root/nln-web-<COMMIT>.tar"
+docker tag "nln-web:<COMMIT>" nln-web:latest
+docker compose config --quiet
+docker compose up -d --no-build
+```
+
+Compose 会在旧容器继续运行时加载镜像，只在最后重建 Web 容器；PostgreSQL 和附件命名卷保持不变。不要提前执行 `docker compose down`，禁止执行 `docker compose down -v`。
+
+### 15.7 发布验证
+
+在服务器执行：
+
+```bash
+cd /home/nln
+docker compose ps
+docker inspect nln-web-1 --format 'container_image={{.Image}}'
+docker image inspect nln-web:latest --format 'tag_image={{.Id}} created={{.Created}}'
+docker compose logs --tail=150 web
+curl --fail http://127.0.0.1:3000/api/health
+curl --fail http://127.0.0.1/api/health
+docker compose exec -T postgres psql -U atlas -d atlas -c 'SELECT count(*) AS applied_migrations FROM drizzle.__drizzle_migrations;'
+git status --short --branch
+```
+
+确认三个容器均为 `healthy`、运行容器镜像 ID 与 `nln-web:latest` 一致、健康接口返回 200、迁移数量符合当前版本且 Git 工作区干净。再从开发机验证公网健康接口、首页跳转和登录页，并执行第 11 节与本次变更直接相关的冒烟测试。
+
+验收通过后可以删除传输用镜像文件；镜像和外部备份继续保留：
+
+```bash
+rm "/root/nln-web-<COMMIT>.tar"
+```
+
+### 15.8 本次已验证基线
+
+2026-08-19 已使用该流程发布提交 `8f4539126c833c0424bab3894af01e701dc31c4b`：本地构建 `linux/amd64` 镜像，SCP 上传并通过 SHA-256 校验，服务器 `docker load` 后使用 `docker compose up -d --no-build` 更新。三个容器健康，数据库迁移为 5 组，内网、代理和公网健康接口均返回 200，首页正确跳转登录页。
+
+### 15.9 旧的服务器构建方式
+
+服务器网络和资源均稳定时仍可执行以下流程，但不作为当前默认方式：
+
+```bash
+cd /home/nln
 git pull --ff-only
 docker compose build web
 docker compose up -d
@@ -509,8 +648,6 @@ docker compose ps
 docker compose logs --tail=150 web
 curl --fail http://127.0.0.1:3000/api/health
 ```
-
-使用压缩包时，先把旧源码目录复制为带日期的发布快照，上传并解压新源码，但保留服务器 `.env` 和 `backups/`。不要把开发机的 `.env` 覆盖到服务器。
 
 Web 启动时会自动执行尚未应用的 Drizzle 迁移。已经部署过的 `drizzle/*.sql` 不应改写；数据库结构变化应新增迁移文件。
 

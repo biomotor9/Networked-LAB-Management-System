@@ -41,6 +41,8 @@ docker compose up -d --build
 
 首次启动会读取 `.env` 中的 `BOOTSTRAP_ADMIN_*` 并幂等创建管理员。成功登录并改密后，应从 `.env` 删除初始密码并重建 Web 容器。当前临时测试环境通过宿主机 80 端口提供公网 HTTP，同时保留 `127.0.0.1:3000`；数据库和附件存储不映射公网端口。详细步骤、风险说明、备份与恢复见 [`docs/deployment.md`](docs/deployment.md)。
 
+生产服务器更新默认不在服务器现场构建：先在已通过测试的开发机上构建 `linux/amd64` Web 镜像，导出并校验后通过 SCP 上传，服务器使用 `docker load` 和 `docker compose up -d --no-build` 更新。这样不依赖服务器访问 Docker Hub 或 npm 镜像源；完整发布、验证与回滚流程见部署手册第 15 节。
+
 ## 常用命令
 
 - `npm run dev`：开发环境；
