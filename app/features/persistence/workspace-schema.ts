@@ -5,7 +5,7 @@ import type { WorkspaceData } from "../workspace/model";
 
 export type BackupFile = {
   format: "atlas-eln-backup";
-  version: 2;
+  version: 3;
   exportedAt: string;
   data: WorkspaceData;
 };

@@ -51,7 +51,7 @@ export async function PUT(request: Request) {
       if (questionData.questions.length) await tx.insert(questions).values(questionData.questions.map((question) => ({
         key: `${project.id}:${question.id}`, id: question.id, projectId: project.id,
         sourcePlanKey: `${project.id}:${question.sourcePlanId}`, sourcePlanId: question.sourcePlanId, number: question.number,
-        title: question.title, context: question.context, sourceExcerpt: question.sourceExcerpt, status: question.status, resolution: question.resolution,
+        title: question.title, context: question.context, sourceExcerpt: question.sourceExcerpt, status: question.status, resolution: question.resolution, answerOutcome: question.answerOutcome, answerNote: question.answerNote,
         createdBy: actor.id, resolvedBy: question.status === "已解决" || question.status === "已搁置" ? actor.id : null,
         resolvedAt: question.status === "已解决" || question.status === "已搁置" ? new Date() : null,
       })));

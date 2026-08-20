@@ -43,6 +43,13 @@
       "when": 1787106679031,
       "tag": "0005_clever_doctor_doom",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787191005700,
+      "tag": "0006_talented_roughhouse",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,7 @@ import test from "node:test";
 import { hasDependencyPath, wouldCreateDependencyCycle } from "../app/features/dependencies/dependency-graph";
 import { parseMarkdownBlocks, serializeMarkdownBlocks } from "../app/features/notebook/markdown-codec";
 import { buildVisiblePlanTree, canReparentPlan, collectDescendantIds } from "../app/features/plans/plan-tree";
+import { resolveCanvasViewport } from "../app/features/workspace/canvas-state";
 import type { Dependency, Plan } from "../app/features/workspace/model";
 
 function plan(id: string, parentId: string | null): Plan {
@@ -19,6 +20,30 @@ function plan(id: string, parentId: string | null): Plan {
     updatedAt: "刚刚",
   };
 }
+
+test("scopes saved canvas viewports to the hydrated project", () => {
+  const projectAView = { __root__: { x: 120, y: -80, zoom: 1.5 } };
+  const switchingToProjectB = resolveCanvasViewport({
+    projectId: "project-b",
+    hydratedProjectId: "project-a",
+    focusId: null,
+    viewStates: projectAView,
+  });
+
+  assert.equal(switchingToProjectB.viewport, undefined);
+  assert.equal(switchingToProjectB.fitView, true);
+
+  const projectBView = { __root__: { x: -20, y: 45, zoom: 0.8 } };
+  const hydratedProjectB = resolveCanvasViewport({
+    projectId: "project-b",
+    hydratedProjectId: "project-b",
+    focusId: null,
+    viewStates: projectBView,
+  });
+
+  assert.deepEqual(hydratedProjectB.viewport, projectBView.__root__);
+  assert.notEqual(hydratedProjectB.key, switchingToProjectB.key);
+});
 
 test("collects a complete plan subtree and rejects hierarchy cycles", () => {
   const plans = [plan("root", null), plan("child", "root"), plan("leaf", "child"), plan("other", null)];
@@ -38,6 +63,21 @@ test("builds an expandable plan tree and reveals matching descendants with their
   assert.deepEqual(buildVisiblePlanTree(plans, new Set()).map(({ plan: item, depth }) => [item.id, depth]), [["root", 0], ["other", 0]]);
   assert.deepEqual(buildVisiblePlanTree(plans, new Set(["root", "child"])).map(({ plan: item, depth }) => [item.id, depth]), [["root", 0], ["child", 1], ["leaf", 2], ["other", 0]]);
   assert.deepEqual(buildVisiblePlanTree(plans, new Set(), "复测").map(({ plan: item, depth }) => [item.id, depth]), [["root", 0], ["child", 1], ["leaf", 2]]);
+});
+
+test("sorts sibling plans by operational status without changing their hierarchy", () => {
+  const plans = [
+    { ...plan("root-done", null), status: "已完成" as const },
+    { ...plan("root-urgent", null), status: "紧急" as const },
+    { ...plan("child-waiting", "root-urgent"), status: "等待" as const },
+    { ...plan("child-active", "root-urgent"), status: "进行中" as const },
+    { ...plan("child-active-second", "root-urgent"), status: "进行中" as const },
+  ];
+
+  assert.deepEqual(
+    buildVisiblePlanTree(plans, new Set(["root-urgent"])).map(({ plan: item, depth }) => [item.id, depth]),
+    [["root-urgent", 0], ["child-active", 1], ["child-active-second", 1], ["child-waiting", 1], ["root-done", 0]],
+  );
 });
 
 test("detects dependency paths and prevents a new directed cycle", () => {

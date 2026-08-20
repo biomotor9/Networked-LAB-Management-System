@@ -16,7 +16,7 @@
     "local:status": "docker compose ps",
     "local:logs": "docker compose logs --tail=100",
     "test": "npm run test:unit && npm run build",
-    "test:unit": "tsx --test tests/content.test.ts tests/domain-logic.test.ts tests/persistence.test.ts tests/password.test.ts tests/project-management.test.ts tests/questions.test.ts tests/server-snapshot.test.ts",
+    "test:unit": "tsx --test tests/content.test.ts tests/dashboard.test.ts tests/domain-logic.test.ts tests/persistence.test.ts tests/password.test.ts tests/project-management.test.ts tests/questions.test.ts tests/server-snapshot.test.ts",
     "lint": "eslint . --ignore-pattern .next --ignore-pattern dist --ignore-pattern .vinext --ignore-pattern .wrangler",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

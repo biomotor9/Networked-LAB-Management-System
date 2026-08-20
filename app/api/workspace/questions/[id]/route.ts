@@ -34,6 +34,7 @@ export async function PATCH(request: Request, context: Context) {
     updatedAt: new Date(),
   }).where(and(eq(questions.projectId, projectId), eq(questions.id, id), eq(questions.version, Number(payload.version)))).returning({ id: questions.id });
   if (!updated) return NextResponse.json({ error: "问题已被其他成员修改，请刷新后重试。", code: "VERSION_CONFLICT" }, { status: 409 });
-  await recordAudit({ action: "question.updated", targetType: "question", targetId: id, projectId, actorUserId: actor.id, teamId: actor.teamId, metadata: { status: next.status, emergencyReason: access.emergencyReason } });
+  const answerUpdated = payload.answerOutcome !== undefined || payload.answerNote !== undefined;
+  await recordAudit({ action: answerUpdated ? "question.answer_updated" : "question.updated", targetType: "question", targetId: id, projectId, actorUserId: actor.id, teamId: actor.teamId, metadata: { status: next.status, answerOutcome: next.answerOutcome, emergencyReason: access.emergencyReason } });
   return NextResponse.json(await readQuestionBundle(projectId, id));
 }

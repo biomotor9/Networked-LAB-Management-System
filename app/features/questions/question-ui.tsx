@@ -31,8 +31,8 @@ export function QuestionSummaryList({ questions, comments, links, onSelect, comp
     const experimentCount = links.filter((link) => link.questionId === question.id).length;
     return <button type="button" className="question-list-item" key={question.id} onClick={() => onSelect(question.id)}>
       <span className={`question-status-dot status-${question.status}`} aria-label={`问题状态：${question.status}`} title={`问题状态：${question.status}`} />
-      <span><strong>{questionCode(question.number)} · {question.title}</strong><small>{question.status} · {commentCount} 条讨论{experimentCount ? ` · ${experimentCount} 个回答来源` : ""}</small></span>
-      <QuestionAnswerIndicator outcome={questionAnswerOutcome(question.id, links)} />
+      <span><strong>{questionCode(question.number)} · {question.title}</strong><small>{question.status} · {commentCount} 条讨论{experimentCount ? ` · ${experimentCount} 个验证实验` : ""}</small></span>
+      <QuestionAnswerIndicator outcome={questionAnswerOutcome(question)} />
     </button>;
   })}</div> : <p className="question-list-empty">尚未记录问题。实验完成后可在这里保留待解答或待验证事项。</p>;
 }
@@ -83,7 +83,7 @@ export function QuestionCreateDialog({ planTitle, sourceExcerpt, onClose, onSubm
 }
 
 export function QuestionDetailDrawer({
-  question, comments, links, plans, canEdit, actorId, onClose, onUpdate, onAddComment, onEditComment, onDeleteComment, onCreateExperiment, onUpdateLink,
+  question, comments, links, plans, canEdit, actorId, onClose, onUpdate, onUpdateAnswer, onAddComment, onEditComment, onDeleteComment, onCreateExperiment,
 }: {
   question: Question;
   comments: QuestionComment[];
@@ -93,11 +93,11 @@ export function QuestionDetailDrawer({
   actorId: string | null;
   onClose: () => void;
   onUpdate: (patch: { title: string; context: string; status: QuestionStatus; resolution: string }) => Promise<void>;
+  onUpdateAnswer: (answerOutcome: VerificationOutcome, answerNote: string) => Promise<void>;
   onAddComment: (content: string) => Promise<void>;
   onEditComment: (comment: QuestionComment, content: string) => Promise<void>;
   onDeleteComment: (comment: QuestionComment) => Promise<void>;
   onCreateExperiment: (input: { title: string; domain: Domain; summary: string; plannedCompletionDate?: string }) => Promise<void>;
-  onUpdateLink: (link: QuestionExperimentLink, outcome: VerificationOutcome, note: string) => Promise<void>;
 }) {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -137,6 +137,7 @@ export function QuestionDetailDrawer({
       </form>
 
       <section className="question-verification-section"><div className="question-section-title"><h3>问题回答</h3>{canEdit && <button type="button" onClick={() => setShowExperimentForm((visible) => !visible)}>＋ 创建验证实验</button>}</div>
+        <QuestionAnswerEditor question={question} canEdit={canEdit} onSave={onUpdateAnswer} onError={setError} />
         {showExperimentForm && <form className="question-experiment-form" onSubmit={(event) => void createExperiment(event)}>
           <label>实验名称<input name="title" required maxLength={300} defaultValue={`验证：${question.title}`} /></label>
           <label>领域<select name="domain" defaultValue={plans.find((plan) => plan.id === question.sourcePlanId)?.domain ?? "综合"}>{["机器学习", "湿实验", "软件", "硬件", "综合"].map((domain) => <option key={domain}>{domain}</option>)}</select></label>
@@ -144,7 +145,7 @@ export function QuestionDetailDrawer({
           <label>计划完成日期<input name="plannedCompletionDate" type="date" /></label>
           <div><button type="button" onClick={() => setShowExperimentForm(false)}>取消</button><button className="primary-button" disabled={saving}>创建并建立溯源</button></div>
         </form>}
-        {activeLinks.length ? <div className="question-answer-list">{activeLinks.map((link) => <VerificationLinkEditor key={`${link.planId}:${link.version}`} link={link} canEdit={canEdit} onSave={onUpdateLink} onError={setError} />)}</div> : <p className="question-list-empty">尚无问题回答。可创建验证实验后回填结果。</p>}
+        {activeLinks.length > 0 && <p className="question-verification-trace">已关联验证实验：{activeLinks.map((link) => plans.find((plan) => plan.id === link.planId)?.title ?? "已移除实验").join("、")}</p>}
       </section>
 
       <section className="question-discussion-section"><div className="question-section-title"><h3>讨论</h3><span>{activeComments.filter((comment) => !comment.deletedAt).length}</span></div>
@@ -160,12 +161,12 @@ export function QuestionDetailDrawer({
   </aside>;
 }
 
-function VerificationLinkEditor({ link, canEdit, onSave, onError }: { link: QuestionExperimentLink; canEdit: boolean; onSave: (link: QuestionExperimentLink, outcome: VerificationOutcome, note: string) => Promise<void>; onError: (message: string) => void }) {
-  const [outcome, setOutcome] = useState(link.outcome);
-  const [note, setNote] = useState(link.note);
+function QuestionAnswerEditor({ question, canEdit, onSave, onError }: { question: Question; canEdit: boolean; onSave: (outcome: VerificationOutcome, note: string) => Promise<void>; onError: (message: string) => void }) {
+  const [outcome, setOutcome] = useState(question.answerOutcome);
+  const [note, setNote] = useState(question.answerNote);
   const [saving, setSaving] = useState(false);
   return <div className="question-answer-fields"><label>回答结果<select value={outcome} disabled={!canEdit} onChange={(event) => setOutcome(event.target.value as VerificationOutcome)}>{verificationOutcomes.map((value) => <option key={value}>{value}</option>)}</select></label>
     <label>结果说明<textarea rows={3} value={note} disabled={!canEdit} maxLength={10000} onChange={(event) => setNote(event.target.value)} /></label>
-    {canEdit && <button type="button" disabled={saving || (outcome === link.outcome && note === link.note)} onClick={() => { setSaving(true); void onSave(link, outcome, note).catch((cause) => onError(cause instanceof Error ? cause.message : "验证结果保存失败。")).finally(() => setSaving(false)); }}>{saving ? "保存中…" : "保存结果"}</button>}
+    {canEdit && <button type="button" disabled={saving || (outcome === question.answerOutcome && note === question.answerNote)} onClick={() => { setSaving(true); void onSave(outcome, note).catch((cause) => onError(cause instanceof Error ? cause.message : "问题回答保存失败。")).finally(() => setSaving(false)); }}>{saving ? "保存中…" : "保存回答"}</button>}
   </div>;
 }

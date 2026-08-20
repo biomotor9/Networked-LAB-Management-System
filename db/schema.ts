@@ -152,6 +152,8 @@ export const questions = pgTable("questions", {
   sourceExcerpt: text("source_excerpt").notNull().default(""),
   status: text("status", { enum: ["待解答", "待验证", "已解决", "已搁置"] }).notNull().default("待解答"),
   resolution: text("resolution").notNull().default(""),
+  answerOutcome: text("answer_outcome", { enum: ["待回填", "支持", "否定", "不确定"] }).notNull().default("待回填"),
+  answerNote: text("answer_note").notNull().default(""),
   version: integer("version").notNull().default(1),
   createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
   resolvedBy: text("resolved_by").references(() => users.id, { onDelete: "set null" }),

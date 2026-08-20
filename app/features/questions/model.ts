@@ -17,10 +17,15 @@ export const MAX_QUESTION_RESOLUTION_LENGTH = 20_000;
 export const MAX_QUESTION_COMMENT_LENGTH = 20_000;
 export const MAX_VERIFICATION_NOTE_LENGTH = 10_000;
 
-export function questionAnswerOutcome(questionId: string, links: QuestionExperimentLink[]): VerificationOutcome {
+export function questionAnswerFromLinks(questionId: string, links: Pick<QuestionExperimentLink, "questionId" | "outcome" | "note">[]): Pick<Question, "answerOutcome" | "answerNote"> {
   const outcomes = links.filter((link) => link.questionId === questionId).map((link) => link.outcome);
-  if (!outcomes.length || outcomes.includes("待回填")) return "待回填";
-  return new Set(outcomes).size === 1 ? outcomes[0] : "不确定";
+  const notes = links.filter((link) => link.questionId === questionId).map((link) => link.note.trim()).filter(Boolean);
+  const answerOutcome = !outcomes.length || outcomes.includes("待回填") ? "待回填" : new Set(outcomes).size === 1 ? outcomes[0] : "不确定";
+  return { answerOutcome, answerNote: notes.join("\n\n") };
+}
+
+export function questionAnswerOutcome(question: Pick<Question, "answerOutcome">): VerificationOutcome {
+  return question.answerOutcome;
 }
 
 function text(value: unknown, label: string, maxLength: number, required = false): string {
@@ -43,18 +48,28 @@ export function validateQuestionCreate(value: unknown): Pick<Question, "sourcePl
   };
 }
 
-export function validateQuestionPatch(value: unknown, current: Pick<Question, "title" | "context" | "status" | "resolution">): Pick<Question, "title" | "context" | "status" | "resolution"> {
+export function validateQuestionAnswer(value: unknown): Pick<Question, "answerOutcome" | "answerNote"> {
+  if (!value || typeof value !== "object") throw new Error("问题回答格式无效。");
+  const candidate = value as Record<string, unknown>;
+  const answerOutcome = candidate.answerOutcome as VerificationOutcome;
+  if (!verificationOutcomes.includes(answerOutcome)) throw new Error("回答结果无效。");
+  return { answerOutcome, answerNote: text(candidate.answerNote ?? "", "结果说明", MAX_VERIFICATION_NOTE_LENGTH) };
+}
+
+export function validateQuestionPatch(value: unknown, current: Pick<Question, "title" | "context" | "status" | "resolution" | "answerOutcome" | "answerNote">): Pick<Question, "title" | "context" | "status" | "resolution" | "answerOutcome" | "answerNote"> {
   if (!value || typeof value !== "object") throw new Error("问题更新格式无效。");
   const candidate = value as Record<string, unknown>;
   const status = (candidate.status ?? current.status) as QuestionStatus;
   if (!questionStatuses.includes(status)) throw new Error("问题状态无效。");
   const resolution = text(candidate.resolution ?? current.resolution, "结论摘要", MAX_QUESTION_RESOLUTION_LENGTH);
   if ((status === "已解决" || status === "已搁置") && !resolution) throw new Error(status === "已解决" ? "解决问题前请填写结论摘要。" : "搁置问题前请填写原因。");
+  const answer = validateQuestionAnswer({ answerOutcome: candidate.answerOutcome ?? current.answerOutcome, answerNote: candidate.answerNote ?? current.answerNote });
   return {
     title: text(candidate.title ?? current.title, "问题标题", MAX_QUESTION_TITLE_LENGTH, true),
     context: text(candidate.context ?? current.context, "问题背景", MAX_QUESTION_CONTEXT_LENGTH),
     status,
     resolution,
+    ...answer,
   };
 }
 
@@ -94,7 +109,7 @@ export function isOpenQuestion(status: QuestionStatus): boolean {
 }
 
 export type QuestionBackupData = {
-  questions: Array<Pick<Question, "id" | "sourcePlanId" | "number" | "title" | "context" | "sourceExcerpt" | "status" | "resolution">>;
+  questions: Array<Pick<Question, "id" | "sourcePlanId" | "number" | "title" | "context" | "sourceExcerpt" | "status" | "resolution" | "answerOutcome" | "answerNote">>;
   questionComments: Array<Pick<QuestionComment, "id" | "questionId" | "content" | "deletedAt">>;
   questionExperimentLinks: Array<Pick<QuestionExperimentLink, "questionId" | "planId" | "outcome" | "note">>;
 };
@@ -105,8 +120,8 @@ export function validateQuestionBackup(value: unknown, allowedPlanIds: Set<strin
   const root = value as Record<string, unknown>;
   if (!Array.isArray(root.questions) || !Array.isArray(root.questionComments) || !Array.isArray(root.questionExperimentLinks)) throw new Error("问题记录备份缺少必要列表。");
   if (root.questions.length > 50_000 || root.questionComments.length > 200_000 || root.questionExperimentLinks.length > 100_000) throw new Error("问题记录备份超过容量限制。");
-  const ids = new Set<string>(); const numbers = new Set<number>();
-  const parsedQuestions = root.questions.map((item) => {
+  const ids = new Set<string>(); const numbers = new Set<number>(); const legacyAnswerIds = new Set<string>();
+  const parsedQuestions: QuestionBackupData["questions"] = root.questions.map((item) => {
     if (!item || typeof item !== "object") throw new Error("问题记录格式无效。");
     const candidate = item as Record<string, unknown>;
     const id = text(candidate.id, "问题 ID", 200, true);
@@ -118,13 +133,15 @@ export function validateQuestionBackup(value: unknown, allowedPlanIds: Set<strin
     if (!questionStatuses.includes(status)) throw new Error("问题状态无效。");
     const resolution = text(candidate.resolution ?? "", "结论摘要", MAX_QUESTION_RESOLUTION_LENGTH);
     if ((status === "已解决" || status === "已搁置") && !resolution) throw new Error("已结束的问题缺少结论摘要。");
+    if (candidate.answerOutcome === undefined && candidate.answerNote === undefined) legacyAnswerIds.add(id);
+    const answer = validateQuestionAnswer({ answerOutcome: candidate.answerOutcome ?? "待回填", answerNote: candidate.answerNote ?? "" });
     ids.add(id); numbers.add(Number(candidate.number));
     return {
       id, sourcePlanId, number: Number(candidate.number),
       title: text(candidate.title, "问题标题", MAX_QUESTION_TITLE_LENGTH, true),
       context: text(candidate.context ?? "", "问题背景", MAX_QUESTION_CONTEXT_LENGTH),
       sourceExcerpt: text(candidate.sourceExcerpt ?? "", "来源摘录", MAX_QUESTION_EXCERPT_LENGTH),
-      status, resolution,
+      status, resolution, ...answer,
     };
   });
   const commentIds = new Set<string>();
@@ -152,5 +169,6 @@ export function validateQuestionBackup(value: unknown, allowedPlanIds: Set<strin
     linkPairs.add(pair);
     return { questionId, planId, ...validateVerificationLink(candidate) };
   });
-  return { questions: parsedQuestions, questionComments: parsedComments, questionExperimentLinks: parsedLinks };
+  const normalizedQuestions = parsedQuestions.map((question) => legacyAnswerIds.has(question.id) ? { ...question, ...questionAnswerFromLinks(question.id, parsedLinks) } : question);
+  return { questions: normalizedQuestions, questionComments: parsedComments, questionExperimentLinks: parsedLinks };
 }

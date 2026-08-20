@@ -22,7 +22,7 @@ function activityLabel(action: string): string {
     "project.emergency_edit_started": "启动了管理员应急编辑", "project.emergency_edit_ended": "结束了管理员应急编辑",
     "attachment.upload": "上传了附件", "attachment.delete": "删除了附件", "workspace.replaced": "更新了实验计划网络",
     "document.updated": "更新了实验正文", "entry.created": "创建了实验事件", "entry.updated": "更新了实验事件", "entry.deleted": "删除了实验事件",
-    "question.created": "记录了实验问题", "question.updated": "更新了问题状态或结论", "question.comment_created": "参与了问题讨论",
+    "question.created": "记录了实验问题", "question.updated": "更新了问题状态或结论", "question.answer_updated": "更新了问题回答", "question.comment_created": "参与了问题讨论",
     "question.comment_updated": "编辑了问题讨论", "question.comment_deleted": "删除了问题讨论", "question.experiment_created": "从问题创建了验证实验", "question.verification_updated": "回填了验证结果",
     "project.migrated": "由系统迁移为项目",
   };

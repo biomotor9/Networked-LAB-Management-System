@@ -1,6 +1,16 @@
-import type { Plan } from "../workspace/model";
+import type { Plan, Status } from "../workspace/model";
 
 export type VisiblePlanTreeRow = { plan: Plan; depth: number };
+
+export const planStatusPriority: Record<Status, number> = {
+  "紧急": 0,
+  "持续关注": 1,
+  "进行中": 2,
+  "等待": 3,
+  "未开始": 4,
+  "已完成": 5,
+  "终止": 6,
+};
 
 export function buildVisiblePlanTree(plans: readonly Plan[], expandedIds: ReadonlySet<string>, query = ""): VisiblePlanTreeRow[] {
   const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
@@ -22,10 +32,15 @@ export function buildVisiblePlanTree(plans: readonly Plan[], expandedIds: Readon
   }
 
   const childrenByParent = new Map<string | null, Plan[]>();
+  const originalOrder = new Map(plans.map((plan, index) => [plan.id, index]));
   for (const plan of plans) {
     const siblings = childrenByParent.get(plan.parentId) ?? [];
     siblings.push(plan);
     childrenByParent.set(plan.parentId, siblings);
+  }
+  for (const siblings of childrenByParent.values()) {
+    siblings.sort((left, right) => planStatusPriority[left.status] - planStatusPriority[right.status]
+      || (originalOrder.get(left.id) ?? 0) - (originalOrder.get(right.id) ?? 0));
   }
 
   const rows: VisiblePlanTreeRow[] = [];

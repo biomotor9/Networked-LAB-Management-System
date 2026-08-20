@@ -35,6 +35,8 @@ export async function readProjectQuestions(projectId: string): Promise<ProjectQu
       sourceExcerpt: question.sourceExcerpt,
       status: question.status,
       resolution: question.resolution,
+      answerOutcome: question.answerOutcome,
+      answerNote: question.answerNote,
       version: question.version,
       createdById: question.createdBy,
       createdByName: question.createdBy ? names.get(question.createdBy) ?? "已移除成员" : "已移除成员",

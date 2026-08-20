@@ -1,4 +1,6 @@
 import { normalizeStatus, type BackupFile, type WorkspaceData } from "./workspace-schema";
+import { questionAnswerFromLinks } from "../questions/model";
+import { verificationOutcomes } from "../workspace/model";
 
 export type KeyValueStorage = {
   getItem(key: string): string | null;
@@ -39,6 +41,7 @@ export function readWorkspaceData(value: unknown): WorkspaceData {
   }
   const plans = root.plans as WorkspaceData["plans"];
   const entries = root.entries as WorkspaceData["entries"];
+  const questionExperimentLinks = Array.isArray(root.questionExperimentLinks) ? root.questionExperimentLinks as WorkspaceData["questionExperimentLinks"] : [];
   if (plans.some((plan) => !isObject(plan) || typeof plan.id !== "string" || typeof plan.title !== "string")) {
     throw new Error("备份中的实验计划格式无效。");
   }
@@ -52,18 +55,24 @@ export function readWorkspaceData(value: unknown): WorkspaceData {
     graphExpanded: Array.isArray(root.graphExpanded) ? root.graphExpanded.filter((id): id is string => typeof id === "string") : [],
     viewStates: isObject(root.viewStates) ? root.viewStates as WorkspaceData["viewStates"] : {},
     notebookDocs: isObject(root.notebookDocs) ? root.notebookDocs as WorkspaceData["notebookDocs"] : {},
-    questions: Array.isArray(root.questions) ? root.questions as WorkspaceData["questions"] : [],
+    questions: Array.isArray(root.questions) ? (root.questions as WorkspaceData["questions"]).map((question) => {
+      const answerOutcome = (question as unknown as { answerOutcome?: unknown }).answerOutcome;
+      if (verificationOutcomes.includes(answerOutcome as WorkspaceData["questions"][number]["answerOutcome"])) {
+        return { ...question, answerNote: typeof question.answerNote === "string" ? question.answerNote : "" };
+      }
+      return { ...question, ...questionAnswerFromLinks(question.id, questionExperimentLinks) };
+    }) : [],
     questionComments: Array.isArray(root.questionComments) ? root.questionComments as WorkspaceData["questionComments"] : [],
-    questionExperimentLinks: Array.isArray(root.questionExperimentLinks) ? root.questionExperimentLinks as WorkspaceData["questionExperimentLinks"] : [],
+    questionExperimentLinks,
   };
 }
 
 export function createBackup(data: WorkspaceData, exportedAt = new Date().toISOString()): BackupFile {
-  return { format: "atlas-eln-backup", version: 2, exportedAt, data };
+  return { format: "atlas-eln-backup", version: 3, exportedAt, data };
 }
 
 export function readBackupFile(value: unknown): WorkspaceData {
-  if (isObject(value) && value.format === "atlas-eln-backup" && value.version !== 1 && value.version !== 2) {
+  if (isObject(value) && value.format === "atlas-eln-backup" && value.version !== 1 && value.version !== 2 && value.version !== 3) {
     throw new Error("该备份版本暂不受支持。");
   }
   return readWorkspaceData(value);

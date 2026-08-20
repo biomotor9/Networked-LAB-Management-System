@@ -66,6 +66,8 @@ export type Question = {
   sourceExcerpt: string;
   status: QuestionStatus;
   resolution: string;
+  answerOutcome: VerificationOutcome;
+  answerNote: string;
   version: number;
   createdById: string | null;
   createdByName: string;
